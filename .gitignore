@@ -1,0 +1,18 @@
+node_modules/
+.next/
+out/
+coverage/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets — never commit
+.env
+.env.*
+!.env.example
+
+# exported query results
+*.csv
+
+# local editor settings
+.vscode/
