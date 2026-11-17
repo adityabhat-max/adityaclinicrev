@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, verifySession } from "@/lib/auth";
 import {
-  fetchPersonTargets, fetchSubmission, fetchTargets, PeopleCheckError, SetupMissingError, submitTargetsOnce, TargetsLockedError,
+  fetchPersonTargets, fetchSubmission, fetchTargetMonths, fetchTargets, PeopleCheckError, SetupMissingError, submitTargetsOnce, TargetsLockedError,
 } from "@/lib/db";
 import { CENTERS, type CenterId } from "@/lib/centers";
 import { editableMonths } from "@/lib/dates";
@@ -31,10 +31,15 @@ export async function GET(req: NextRequest) {
   if (!MONTH.test(month)) return NextResponse.json({ error: "Invalid month" }, { status: 400 });
   try {
     const m = `${month}-01`;
-    const [saved, savedPeople, submission] = await Promise.all([
-      fetchTargets(m, { fresh: true }), fetchPersonTargets(m, { fresh: true }), fetchSubmission(m),
+    const [saved, savedPeople, submission, savedMonths] = await Promise.all([
+      fetchTargets(m, { fresh: true }), fetchPersonTargets(m, { fresh: true }), fetchSubmission(m), fetchTargetMonths(),
     ]);
+    // Month picker: the present month (the only editable one) + every earlier month with saved targets (view only).
+    const present = editableMonths()[0];
+    const months = [present, ...savedMonths.filter((x) => x < present)];
     const locked = Object.keys(saved).length > 0 || Object.keys(savedPeople).length > 0 || !!submission;
+    if (!locked && month !== present)
+      return NextResponse.json({ error: "No targets were saved for that month" }, { status: 404 });
     const source: Record<string, number> = locked
       ? savedPeople
       : await fetchPersonTargets(previousMonth(m), { fresh: true }).catch(() => ({}));
@@ -42,7 +47,8 @@ export async function GET(req: NextRequest) {
     // null = no value (not saved / nothing to copy from last month)
     const people = Object.fromEntries(rosterPeople().map((p) => [p.name, source[personKey(p.name)] ?? null]));
     return NextResponse.json({
-      month, locked, editable: !locked && editableMonths().includes(month), targets, people,
+      month, months, locked, editable: !locked && month === present, targets, people,
+      hasPeople: Object.keys(savedPeople).length > 0,
       roster: rosterPeople(),
       submittedBy: submission?.submitted_by ?? null, submittedAt: submission?.submitted_at ?? null,
     });

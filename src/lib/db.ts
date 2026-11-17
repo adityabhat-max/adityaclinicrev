@@ -118,6 +118,13 @@ export function fetchPersonTargets(month: string, opts: { fresh?: boolean } = {}
   return opts.fresh ? run() : cached(`targets:people:${month}`, run);
 }
 
+/** Months ("YYYY-MM") that have any saved targets, newest first. */
+export async function fetchTargetMonths(): Promise<string[]> {
+  const rows = await read((db) => db<{ m: string }[]>`
+    select distinct to_char(month, 'YYYY-MM') as m from sales_dash.targets order by 1 desc`);
+  return rows.map((r) => r.m);
+}
+
 export class TargetsLockedError extends Error {}
 export class SetupMissingError extends Error {}
 /** The database still only accepts people listed in sales_dash.sales_owners (foreign key). */

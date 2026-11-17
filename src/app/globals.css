@@ -1,6 +1,7 @@
 :root {
   --bg: #f6f7f9; --surface: #ffffff; --text: #1b1f24; --muted: #66707c; --line: #e3e6ea;
   --head: #1f3a5f; --head-text: #ffffff; --pos: #13795b; --neg: #c0392b; --sub: #f1f4f8;
+  color-scheme: light dark; /* scrollbars, date pickers and dropdowns follow the theme */
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #111418; --surface: #1a1e24; --text: #e6e9ed; --muted: #9aa4af; --line: #2c323a;
@@ -23,9 +24,9 @@ input, select, button, summary { font: inherit; color: var(--text); background: 
 .multi .menu { position: absolute; z-index: 5; background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
                padding: 8px; max-height: 320px; overflow: auto; min-width: 240px; box-shadow: 0 6px 20px rgb(0 0 0 / .15); }
 .check { flex-direction: row !important; align-items: center; gap: 6px !important; color: var(--text) !important; padding: 2px 0; }
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-bottom: 12px; }
-.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
-.kpi .v { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpis { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.kpi .v { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .tableWrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
@@ -41,10 +42,10 @@ button.link { background: none; border: none; padding: 0; color: var(--head-link
 /* pinned "Zenoti data … · name ROLE" line */
 .status { font-size: 12px; margin: 0 0 12px; position: sticky; top: 0; z-index: 30; background: var(--bg);
           padding: 8px 0; border-bottom: 1px solid var(--line); }
-/* table scrolls inside its box: column headers stay fixed on top, TOTAL stays fixed at the bottom */
-.tableWrap { max-height: calc(100vh - 90px); overflow: auto; }
-thead th { position: sticky; top: 0; z-index: 2; box-shadow: 0 1px 0 var(--line); }
-tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--surface); }
+/* The page scrolls (no scroll box inside the page). useStickyTable moves the header row to stay under the
+   status line and the TOTAL row to stay at the bottom of the window. */
+thead th { position: relative; z-index: 3; transform: translateY(var(--head-y, 0px)); box-shadow: 0 1px 0 var(--line); }
+tfoot td { position: relative; z-index: 3; transform: translateY(var(--foot-y, 0px)); background: var(--surface); }
 .tabs { display: flex; gap: 4px; margin-left: auto; align-self: flex-end; }
 .tabs a { padding: 6px 14px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13px; }
 .tabs a.active { background: var(--head); color: var(--head-text); border-color: var(--head); }
@@ -70,3 +71,18 @@ button:disabled { opacity: .6; cursor: default; }
 .loginCard h1 { font-size: 18px; } .loginCard p { margin: 0; }
 .loginCard label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .loginCard button { padding: 8px; }
+
+/* Smaller windows / zoomed-in browsers: even KPI rows and slightly tighter spacing. */
+@media (max-width: 1250px) {
+  .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  main { padding: 12px; }
+  h1 { font-size: 18px; }
+  .filters { gap: 8px 10px; padding: 10px; }
+  .kpi { padding: 8px 10px; }
+  .kpi .v { font-size: 17px; }
+  th, td { padding: 6px 8px; }
+}
+@media (max-width: 640px) {
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tabs { margin-left: 0; }
+}

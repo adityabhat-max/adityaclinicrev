@@ -7,6 +7,7 @@ import { dayLabel, rangeLabel, type Range } from "@/lib/dates";
 import type { Report } from "@/lib/report";
 import type { Role } from "@/lib/auth";
 import Tabs from "./Tabs";
+import { useStickyTable } from "./useStickyTable";
 
 interface Payload {
   current: Range; comparison: Range; yesterday: string; generatedAt: string; report: Report; error?: string;
@@ -32,6 +33,7 @@ export default function Dashboard({ initial, user }: {
   const [open, setOpen] = useState<CenterId | null>(null);
   const [centersOpen, setCentersOpen] = useState(false);
   const centersRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
 
   // Close the centers menu on outside click or Esc.
   useEffect(() => {
@@ -82,6 +84,7 @@ export default function Dashboard({ initial, user }: {
     [centers]);
 
   const r = data?.report;
+  useStickyTable(tableRef, !!r);
   const curL = data ? rangeLabel(data.current) : "";
   const cmpL = data ? rangeLabel(data.comparison) : "";
   const yL = data ? dayLabel(data.yesterday) : "";
@@ -172,7 +175,7 @@ export default function Dashboard({ initial, user }: {
             <Kpi label="Product Sales" value={inr(r.total.product)} />
           </section>
 
-          <div className="tableWrap dashTable">
+          <div className="tableWrap dashTable" ref={tableRef}>
             <table>
               <thead>
                 <tr>

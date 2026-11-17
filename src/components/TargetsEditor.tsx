@@ -1,15 +1,16 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Tabs from "./Tabs";
+import { useStickyTable } from "./useStickyTable";
 import { CENTERS, type CenterId } from "@/lib/centers";
 import { monthLabel } from "@/lib/dates";
 import { planErrors, type RosterPerson } from "@/lib/targets";
 import type { Role } from "@/lib/auth";
 
 interface MonthData {
-  month: string; locked: boolean; editable: boolean; targets: Record<CenterId, number>;
-  people: Record<string, number | null>; roster: RosterPerson[];
+  month: string; months: string[]; locked: boolean; editable: boolean; targets: Record<CenterId, number>;
+  people: Record<string, number | null>; hasPeople: boolean; roster: RosterPerson[];
   submittedBy: string | null; submittedAt: string | null;
 }
 
@@ -22,7 +23,9 @@ const blank = (v: string | undefined) => String(v ?? "").trim() === "";
 const okNum = (v: string | undefined) => !blank(v) && Number.isFinite(num(v)) && num(v) >= 0;
 
 export default function TargetsEditor({ user, months }: { user: { name: string; role: Role }; months: string[] }) {
-  const month = months[0]; // only the present month
+  const present = months[0]; // the only month that can ever be edited
+  const [month, setMonth] = useState(present);
+  const [monthList, setMonthList] = useState<string[]>(months);
   const [data, setData] = useState<MonthData | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});   // center id → value
   const [pdraft, setPdraft] = useState<Record<string, string>>({}); // person name → value
@@ -40,13 +43,19 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
     if (!res.ok) { setError(j.error ?? "Could not load targets"); setData(null); return; }
     const d = j as MonthData;
     setData(d);
+    if (d.months?.length) setMonthList(d.months);
     setDraft(Object.fromEntries(CENTERS.map((c) => [c.id, String(Math.round(d.targets[c.id] ?? 0))])));
     setPdraft(Object.fromEntries(d.roster.map((p) => [p.name, d.people[p.name] == null ? "" : String(Math.round(d.people[p.name]!))])));
   }, []);
 
   useEffect(() => { load(month); }, [month, load]);
 
+  const tableRef = useRef<HTMLDivElement>(null);
+  useStickyTable(tableRef, !!data && !loading);
+
   const editable = !!data?.editable;
+  const showPeople = editable || !!data?.hasPeople; // past months without people targets: centers only
+  const isPast = month < present;
   const centerVal = (id: CenterId) => (editable ? num(draft[id]) || 0 : data?.targets[id] ?? 0);
   const personVal = (name: string) => (editable ? num(pdraft[name]) || 0 : data?.people[name] ?? 0);
   const roster = useMemo(() => data?.roster ?? [], [data]);
@@ -103,7 +112,13 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
       </header>
 
       <section className="filters">
-        <div className="monthTag">Month<b>{label}</b></div>
+        <label>Month
+          <select value={month} onChange={(e) => setMonth(e.target.value)}>
+            {monthList.map((m) => (
+              <option key={m} value={m}>{monthLabel(`${m}-01`)}{m === present ? " (current)" : " — view only"}</option>
+            ))}
+          </select>
+        </label>
         <Tabs active="targets" role={user.role} />
       </section>
 
@@ -118,7 +133,9 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
       {data && !loading && (
         <>
           <p className={data.locked ? "lockNote" : "openNote"}>
-            {data.locked
+            {isPast && !data.submittedAt
+              ? <>🔒 {label} is a past month — targets are view only. To change them, contact the dashboard owner.</>
+              : data.locked
               ? <>🔒 Targets for {label} are locked
                   {data.submittedAt ? <> — submitted by <b>{data.submittedBy}</b> on <b>{when(data.submittedAt)}</b></> : " (set in the database)"}.
                   {" "}To change them, contact the dashboard owner.</>
@@ -127,10 +144,11 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
                   the center target. You can submit once — after that centers and people are locked.</>}
           </p>
 
-          <div className="tableWrap targetsTable">
+          <div className="tableWrap targetsTable" ref={tableRef}>
             <table>
               <thead>
-                <tr><th>S.No.</th><th className="l">Center / Sales person</th><th>Target ({label})</th><th>People total</th><th>Check</th></tr>
+                <tr><th>S.No.</th><th className="l">{showPeople ? "Center / Sales person" : "Center"}</th><th>Target ({label})</th>
+                  {showPeople && <><th>People total</th><th>Check</th></>}</tr>
               </thead>
               <tbody>
                 {CENTERS.map((c, i) => {
@@ -144,12 +162,14 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
                         <td>{editable
                           ? input(draft[c.id] ?? "", (v) => setDraft((d) => ({ ...d, [c.id]: v })), `Target for ${c.name}`, !okNum(draft[c.id]))
                           : inr(centerVal(c.id))}</td>
-                        <td>{inr(peopleSum(c.id))}</td>
-                        <td className={matches ? "pos" : "neg"}>
-                          {matches ? "✓ adds up" : diff < 0 ? `${inr(-diff)} short` : `${inr(diff)} over`}
-                        </td>
+                        {showPeople && <>
+                          <td>{inr(peopleSum(c.id))}</td>
+                          <td className={matches ? "pos" : "neg"}>
+                            {matches ? "✓ adds up" : diff < 0 ? `${inr(-diff)} short` : `${inr(diff)} over`}
+                          </td>
+                        </>}
                       </tr>
-                      {peopleOf(c.id).map((p) => (
+                      {showPeople && peopleOf(c.id).map((p) => (
                         <tr key={p.name} className="sub">
                           <td></td>
                           <td className="l person">{p.name}</td>
@@ -164,8 +184,9 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
                 })}
               </tbody>
               <tfoot>
-                <tr><td colSpan={2} className="l">TOTAL</td><td>{inr(total)}</td><td>{inr(peopleTotal)}</td>
-                  <td className={mismatched ? "neg" : "pos"}>{mismatched ? `${mismatched} center(s) off` : "✓ all add up"}</td></tr>
+                <tr><td colSpan={2} className="l">TOTAL</td><td>{inr(total)}</td>
+                  {showPeople && <><td>{inr(peopleTotal)}</td>
+                    <td className={mismatched ? "neg" : "pos"}>{mismatched ? `${mismatched} center(s) off` : "✓ all add up"}</td></>}</tr>
               </tfoot>
             </table>
           </div>
