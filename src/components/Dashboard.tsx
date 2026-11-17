@@ -12,6 +12,8 @@ interface Payload {
   current: Range; comparison: Range; yesterday: string; generatedAt: string; report: Report; error?: string;
   freshness?: { data_through?: string; last_successful_sync?: string } | null;
   targetMonth?: string; savedTargets?: number;
+  /** Sales-person targets for the month, keyed by lower-case name (display only). */
+  personTargets?: Record<string, number>;
 }
 
 const inr = (n: number | null | undefined) =>
@@ -190,13 +192,19 @@ export default function Dashboard({ initial, user }: {
                       <td>{inr(c.comparison)}</td><td className={c.difference < 0 ? "neg" : "pos"}>{inr(c.difference)}</td>
                       <td>{inr(c.yesterday)}</td><td>{inr(c.product)}</td><td>{inr(c.target80)}</td><td>{inr(c.deficit80)}</td>
                     </tr>
-                    {open === c.id && [...c.owners, { name: "No Sales Owner", ...c.noSalesOwner }].map((o) => (
-                      <tr key={o.name} className="sub">
-                        <td></td><td className="l">{o.name}</td><td></td><td>{inr(o.current)}</td><td></td>
-                        <td>{inr(o.comparison)}</td><td>{inr(o.current - (o.comparison ?? 0))}</td>
-                        <td>{inr(o.yesterday)}</td><td>{inr(o.product)}</td><td></td><td></td>
-                      </tr>
-                    ))}
+                    {open === c.id && [...c.owners, { name: "No Sales Owner", nso: true, ...c.noSalesOwner }].map((o) => {
+                      // Person target: same formulas as the center row (Achieved % = current ÷ target, 80% = target × 0.8).
+                      const t = "nso" in o ? undefined : data?.personTargets?.[o.name.toLowerCase()];
+                      return (
+                        <tr key={o.name} className="sub">
+                          <td></td><td className="l">{o.name}</td><td>{t == null ? "" : inr(t)}</td><td>{inr(o.current)}</td>
+                          <td>{t == null ? "" : pct(t ? o.current / t : null)}</td>
+                          <td>{inr(o.comparison)}</td><td>{inr(o.current - (o.comparison ?? 0))}</td>
+                          <td>{inr(o.yesterday)}</td><td>{inr(o.product)}</td>
+                          <td>{t == null ? "" : inr(t * 0.8)}</td><td>{t == null ? "" : inr(t * 0.8 - o.current)}</td>
+                        </tr>
+                      );
+                    })}
                   </Fragment>
                 ))}
               </tbody>

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { buildReport } from "@/lib/report";
 import { compatFromEnv } from "@/lib/compat";
 import { defaultPeriods, todayIST, yesterdayFor, type Range } from "@/lib/dates";
-import { fetchFreshness, fetchSales, fetchTargets } from "@/lib/db";
+import { fetchFreshness, fetchPersonTargets, fetchSales, fetchTargets } from "@/lib/db";
 import type { CenterId } from "@/lib/centers";
 
 export const dynamic = "force-dynamic";
@@ -21,10 +21,11 @@ export async function GET(req: NextRequest) {
   const targetMonth = `${current.from.slice(0, 7)}-01`; // targets are monthly: month of the current period's start
 
   try {
-    const [rows, freshness, targets] = await Promise.all([
+    const [rows, freshness, targets, personTargets] = await Promise.all([
       fetchSales([current, comparison, { from: yesterday, to: yesterday }]),
       fetchFreshness().catch(() => null),
       fetchTargets(targetMonth).catch(() => ({})),
+      fetchPersonTargets(targetMonth).catch(() => ({})), // display only — never used in the report's figures
     ]);
     const report = buildReport({
       rows, current, comparison, yesterday, compat: compatFromEnv(), targets,
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
     });
     return NextResponse.json({
       current, comparison, yesterday, generatedAt: new Date().toISOString(), freshness, report,
-      targetMonth, savedTargets: Object.keys(targets).length,
+      targetMonth, savedTargets: Object.keys(targets).length, personTargets,
     });
   } catch (e) {
     console.error(e);

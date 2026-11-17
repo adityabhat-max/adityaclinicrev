@@ -45,7 +45,15 @@ create table if not exists sales_dash.target_submissions (
   submitted_at timestamptz not null default now()
 );
 grant select, insert on sales_dash.target_submissions to dashboard_ro;
+
+-- sales-person targets use the dashboard's roster (src/lib/roster.ts), which has people that are not in
+-- sales_dash.sales_owners — drop the name check so every rostered person can get a target
+alter table sales_dash.targets drop constraint if exists targets_sold_by_fkey;
 ```
+
+Sales-person targets are stored in the same table (`center_id` null, `sold_by` = the roster name). They are
+submitted together with the center targets, each center's people must add up to exactly the center target,
+and they only appear in the dashboard's drill-down rows — they never change any center or total figure.
 
 ## Changing locked targets (owner only)
 Targets are submitted once per month from the Targets page and are then locked. To change them, the owner edits
@@ -56,8 +64,11 @@ update sales_dash.targets t set target = 1000000
 from sales_dash.centers c
 where t.center_id = c.center_id and t.month = '2026-11-01' and c.zenoti_name = 'Ludhiana, Punjab';
 
--- or reopen the whole month so the admin can submit again
-delete from sales_dash.targets where month = '2026-11-01' and sold_by is null;
+-- change one sales person
+update sales_dash.targets set target = 500000 where month = '2026-11-01' and sold_by = 'Vanita Pasbola - (VV)';
+
+-- or reopen the whole month (centers AND people) so the admin can submit again
+delete from sales_dash.targets where month = '2026-11-01';
 delete from sales_dash.target_submissions where month = '2026-11-01';
 ```
 The admin can only submit targets for the present month.

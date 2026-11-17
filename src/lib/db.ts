@@ -3,6 +3,7 @@ import postgres from "postgres";
 import { mergeRanges, type Range } from "./dates";
 import { INTERNAL_PATTERN, type SaleRow } from "./report";
 import { CENTERS, type CenterId } from "./centers";
+import { personKey } from "./targets";
 
 // Direct Postgres connection: sales_dash is not exposed through the Supabase REST API.
 // Use the transaction pooler (port 6543); run the functions in Mumbai (vercel.json) next to the database.
@@ -78,8 +79,20 @@ async function fetchTargetsUncached(month: string): Promise<Partial<Record<Cente
   return out;
 }
 
+/** Sales-person targets saved for a month, keyed by personKey(name). */
+export function fetchPersonTargets(month: string, opts: { fresh?: boolean } = {}): Promise<Record<string, number>> {
+  const run = async () => {
+    const rows = await sql()<{ sold_by: string; target: number }[]>`
+      select sold_by, target::float8 as target from sales_dash.targets where month = ${month}::date and sold_by is not null`;
+    return Object.fromEntries(rows.map((r) => [personKey(r.sold_by), r.target]));
+  };
+  return opts.fresh ? run() : cached(`targets:people:${month}`, run);
+}
+
 export class TargetsLockedError extends Error {}
 export class SetupMissingError extends Error {}
+/** The database still only accepts people listed in sales_dash.sales_owners (foreign key). */
+export class PeopleCheckError extends Error {}
 
 export interface Submission { submitted_by: string; submitted_at: string }
 
@@ -96,18 +109,20 @@ export async function fetchSubmission(month: string): Promise<Submission | null>
 }
 
 /**
- * Submit center targets for a month — ONE time only, recording who and when.
+ * Submit center AND sales-person targets for a month — ONE time only, together, recording who and when.
  * The submission row (primary key = month) and plain INSERTs into sales_dash.targets (unique per
- * month+center) make a second submission fail and roll back. Give the app's DB role INSERT but not
- * UPDATE/DELETE so the database itself enforces the lock; the owner changes targets in Supabase.
+ * month+center and month+person) make a second submission fail and roll back. Give the app's DB role
+ * INSERT but not UPDATE/DELETE so the database itself enforces the lock; the owner changes targets in Supabase.
  */
-export async function submitTargetsOnce(month: string, targets: Record<CenterId, number>, submittedBy: string): Promise<void> {
+export async function submitTargetsOnce(
+  month: string, targets: Record<CenterId, number>, people: Record<string, number>, submittedBy: string,
+): Promise<void> {
   const db = sql();
   const centers = await db<{ center_id: string; zenoti_name: string }[]>`select center_id, zenoti_name from sales_dash.centers`;
   try {
     await db.begin(async (tx) => {
       const [{ n }] = await tx<{ n: number }[]>`
-        select count(*)::int n from sales_dash.targets where month = ${month}::date and center_id is not null and sold_by is null`;
+        select count(*)::int n from sales_dash.targets where month = ${month}::date`;
       if (n > 0) throw new TargetsLockedError("Targets for this month were already submitted");
       await tx`insert into sales_dash.target_submissions (month, submitted_by, submitted_at) values (${month}::date, ${submittedBy}, now())`;
       for (const [id, value] of Object.entries(targets) as [CenterId, number][]) {
@@ -116,10 +131,14 @@ export async function submitTargetsOnce(month: string, targets: Record<CenterId,
         if (!centerId) throw new Error(`Center ${id} not found in sales_dash.centers`);
         await tx`insert into sales_dash.targets (month, center_id, sold_by, target) values (${month}::date, ${centerId}, null, ${value})`;
       }
+      for (const [name, value] of Object.entries(people))
+        await tx`insert into sales_dash.targets (month, center_id, sold_by, target) values (${month}::date, null, ${name}, ${value})`;
     });
     clearCache("targets:");
   } catch (e) {
     if (e instanceof TargetsLockedError) throw e;
+    if (e instanceof Error && /targets_sold_by_fkey|foreign key.*sold_by/i.test(e.message))
+      throw new PeopleCheckError("sales_dash.targets still requires people to be in sales_dash.sales_owners");
     if (e instanceof Error && /duplicate key|unique/i.test(e.message)) throw new TargetsLockedError("Targets for this month were already submitted");
     if (e instanceof Error && /target_submissions.*does not exist|relation .* does not exist/i.test(e.message))
       throw new SetupMissingError("sales_dash.target_submissions has not been created yet");
