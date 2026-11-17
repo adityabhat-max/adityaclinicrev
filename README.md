@@ -35,5 +35,19 @@ The app's Postgres role needs:
 ```sql
 grant usage on schema sales_dash to dashboard_ro;
 grant select on all tables in schema sales_dash to dashboard_ro;
-grant insert, update on sales_dash.targets to dashboard_ro;   -- admin target edits
+grant insert on sales_dash.targets to dashboard_ro;            -- admin submits targets (once per month)
+revoke update, delete on sales_dash.targets from dashboard_ro; -- so submitted targets can't be changed by the app
+```
+
+## Changing locked targets (owner only)
+Targets are submitted once per month from the Targets page and are then locked. To change them, the owner edits
+them in the Supabase SQL Editor, e.g.:
+```sql
+-- change one center
+update sales_dash.targets t set target = 1000000
+from sales_dash.centers c
+where t.center_id = c.center_id and t.month = '2026-11-01' and c.zenoti_name = 'Ludhiana, Punjab';
+
+-- or reopen the whole month so the admin can submit again
+delete from sales_dash.targets where month = '2026-11-01' and sold_by is null;
 ```
