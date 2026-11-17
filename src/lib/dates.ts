@@ -36,6 +36,14 @@ export function yesterdayFor(currentTo: ISODate, today: ISODate = todayIST()): I
 
 export const inRange = (d: ISODate, r: Range) => d >= r.from && d <= r.to;
 
+/** Months ("YYYY-MM") the admin may submit targets for: this month and next month (India time). */
+export function editableMonths(today: ISODate = todayIST()): string[] {
+  const [y, m] = parts(today);
+  const ny = m === 12 ? y + 1 : y;
+  const nm = m === 12 ? 1 : m + 1;
+  return [`${y}-${String(m).padStart(2, "0")}`, `${ny}-${String(nm).padStart(2, "0")}`];
+}
+
 /** Merge overlapping/adjacent ranges so each day is fetched once. */
 export function mergeRanges(ranges: Range[]): Range[] {
   const sorted = [...ranges].sort((a, b) => a.from.localeCompare(b.from));

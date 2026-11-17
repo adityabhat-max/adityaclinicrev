@@ -48,22 +48,34 @@ export async function fetchTargets(month: string): Promise<Partial<Record<Center
   return out;
 }
 
-/** Insert or update center targets for a month. Requires INSERT/UPDATE on sales_dash.targets. */
-export async function saveTargets(month: string, targets: Partial<Record<CenterId, number>>): Promise<void> {
+export class TargetsLockedError extends Error {}
+
+/**
+ * Submit center targets for a month — ONE time only. Plain INSERTs (no update): if any center already
+ * has a target for that month, the unique index (month, center_id) rejects it and the whole submission
+ * rolls back. Give the app's DB role INSERT but not UPDATE on sales_dash.targets so the database itself
+ * enforces the lock; changes after submission are made by the owner directly in Supabase.
+ */
+export async function submitTargetsOnce(month: string, targets: Record<CenterId, number>): Promise<void> {
   const db = sql();
   const centers = await db<{ center_id: string; zenoti_name: string }[]>`select center_id, zenoti_name from sales_dash.centers`;
-  await db.begin(async (tx) => {
-    for (const [id, value] of Object.entries(targets) as [CenterId, number][]) {
-      const zen = CENTERS.find((c) => c.id === id)?.zenoti.toLowerCase();
-      const centerId = centers.find((c) => c.zenoti_name.toLowerCase() === zen)?.center_id;
-      if (!centerId) throw new Error(`Center ${id} not found in sales_dash.centers`);
-      await tx`
-        insert into sales_dash.targets (month, center_id, sold_by, target)
-        values (${month}::date, ${centerId}, null, ${value})
-        on conflict (month, center_id) where center_id is not null
-        do update set target = excluded.target`;
-    }
-  });
+  try {
+    await db.begin(async (tx) => {
+      const [{ n }] = await tx<{ n: number }[]>`
+        select count(*)::int n from sales_dash.targets where month = ${month}::date and center_id is not null and sold_by is null`;
+      if (n > 0) throw new TargetsLockedError("Targets for this month were already submitted");
+      for (const [id, value] of Object.entries(targets) as [CenterId, number][]) {
+        const zen = CENTERS.find((c) => c.id === id)?.zenoti.toLowerCase();
+        const centerId = centers.find((c) => c.zenoti_name.toLowerCase() === zen)?.center_id;
+        if (!centerId) throw new Error(`Center ${id} not found in sales_dash.centers`);
+        await tx`insert into sales_dash.targets (month, center_id, sold_by, target) values (${month}::date, ${centerId}, null, ${value})`;
+      }
+    });
+  } catch (e) {
+    if (e instanceof TargetsLockedError) throw e;
+    if (e instanceof Error && /duplicate key|unique/i.test(e.message)) throw new TargetsLockedError("Targets for this month were already submitted");
+    throw e;
+  }
 }
 
 export async function fetchFreshness(): Promise<unknown> {

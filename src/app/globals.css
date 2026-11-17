@@ -38,7 +38,20 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--head); }
 .error { color: var(--neg); }
 .topRight { display: flex; gap: 14px; align-items: baseline; }
 button.link { background: none; border: none; padding: 0; color: var(--head-link, #4a90d9); cursor: pointer; text-decoration: underline; font-size: 12px; }
-.status { font-size: 12px; margin: 0 0 12px; }
+/* pinned "Zenoti data … · name ROLE" line */
+.status { font-size: 12px; margin: 0 0 12px; position: sticky; top: 0; z-index: 30; background: var(--bg);
+          padding: 8px 0; border-bottom: 1px solid var(--line); }
+/* table scrolls inside its box: column headers stay fixed on top, TOTAL stays fixed at the bottom */
+.tableWrap { max-height: calc(100vh - 90px); overflow: auto; }
+thead th { position: sticky; top: 0; z-index: 2; box-shadow: 0 1px 0 var(--line); }
+tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--surface); }
+.tabs { display: flex; gap: 4px; margin-left: auto; align-self: flex-end; }
+.tabs a { padding: 6px 14px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13px; }
+.tabs a.active { background: var(--head); color: var(--head-text); border-color: var(--head); }
+.tabs a:not(.active):hover { background: var(--sub); }
+.targetsTable { max-width: 560px; }
+.lockNote, .openNote { font-size: 13px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); }
+.lockNote { border-color: var(--neg); }
 .who { color: var(--text); font-weight: 600; }
 .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; margin-left: 4px; vertical-align: 1px; }
 .badge.admin { background: #c0392b; color: #fff; } .badge.viewer { background: var(--line); color: var(--text); }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildReport, type SaleRow } from "./report";
 import { FIXED, SHEET } from "./compat";
-import { defaultPeriods, yesterdayFor, mergeRanges } from "./dates";
+import { defaultPeriods, yesterdayFor, mergeRanges, editableMonths } from "./dates";
 
 const NOV = { from: "2026-11-01", to: "2026-11-16" };
 const OCT = { from: "2026-10-01", to: "2026-10-16" };
@@ -23,6 +23,10 @@ describe("dates", () => {
   it("yesterday = today-1, or the range end when the range is in the past", () => {
     expect(yesterdayFor("2026-11-16", "2026-11-16")).toBe("2026-11-15");
     expect(yesterdayFor("2026-10-31", "2026-11-16")).toBe("2026-10-31");
+  });
+  it("admin can submit targets for this month and next month only", () => {
+    expect(editableMonths("2026-11-17")).toEqual(["2026-11", "2026-12"]);
+    expect(editableMonths("2026-12-05")).toEqual(["2026-12", "2027-01"]);
   });
   it("merges overlapping ranges", () => {
     expect(mergeRanges([NOV, OCT, { from: "2026-11-15", to: "2026-11-15" }])).toEqual([OCT, NOV]);

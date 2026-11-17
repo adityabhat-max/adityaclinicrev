@@ -3,9 +3,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CENTERS, type CenterId } from "@/lib/centers";
 import { ROSTER } from "@/lib/roster";
-import { dayLabel, monthLabel, rangeLabel, type Range } from "@/lib/dates";
+import { dayLabel, rangeLabel, type Range } from "@/lib/dates";
 import type { Report } from "@/lib/report";
 import type { Role } from "@/lib/auth";
+import Tabs from "./Tabs";
 
 interface Payload {
   current: Range; comparison: Range; yesterday: string; generatedAt: string; report: Report; error?: string;
@@ -22,11 +23,6 @@ export default function Dashboard({ initial, user }: {
   initial: { current: Range; comparison: Range };
   user: { name: string; role: Role };
 }) {
-  const isAdmin = user.role === "admin";
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<Partial<Record<CenterId, string>>>({});
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState("");
   const [current, setCurrent] = useState(initial.current);
   const [comparison, setComparison] = useState(initial.comparison);
   const [centers, setCenters] = useState<CenterId[]>([]);
@@ -80,30 +76,6 @@ export default function Dashboard({ initial, user }: {
   const toggleCenter = (id: CenterId) =>
     setCenters((cs) => (cs.includes(id) ? cs.filter((c) => c !== id) : [...cs, id]));
 
-  const targetMonth = (data?.targetMonth ?? `${current.from.slice(0, 7)}-01`);
-  const startEdit = () => {
-    if (!r) return;
-    setDraft(Object.fromEntries(r.centers.map((c) => [c.id, String(Math.round(c.target))])));
-    setSaveMsg(""); setEditing(true);
-  };
-  const saveTargets = async () => {
-    const targets: Record<string, number> = {};
-    for (const [id, v] of Object.entries(draft)) {
-      const n = Number(String(v).replace(/,/g, ""));
-      if (!Number.isFinite(n) || n < 0) { setSaveMsg(`Invalid target for ${id}`); return; }
-      targets[id] = n;
-    }
-    setSaving(true); setSaveMsg("");
-    const res = await fetch("/api/targets", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ month: targetMonth.slice(0, 7), targets }),
-    });
-    const j = await res.json().catch(() => ({}));
-    setSaving(false);
-    if (!res.ok) { setSaveMsg(j.error ?? "Could not save targets"); return; }
-    setEditing(false); setSaveMsg(`Targets for ${monthLabel(targetMonth)} saved`);
-    load();
-  };
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/login";
@@ -160,6 +132,7 @@ export default function Dashboard({ initial, user }: {
             {ownerOptions.map(({ n, id }) => <option key={n} value={n}>{n} · {id}</option>)}
           </select>
         </label>
+        <Tabs active="dashboard" role={user.role} />
       </section>
 
       <p className="status">
@@ -187,27 +160,7 @@ export default function Dashboard({ initial, user }: {
             <Kpi label="Product Sales" value={inr(r.total.product)} />
           </section>
 
-          {isAdmin && (
-            <div className="adminBar">
-              {editing ? (
-                <>
-                  <span>Editing targets for <b>{monthLabel(targetMonth)}</b></span>
-                  <button type="button" className="primary" onClick={saveTargets} disabled={saving}>{saving ? "Saving…" : "Save targets"}</button>
-                  <button type="button" onClick={() => { setEditing(false); setSaveMsg(""); }} disabled={saving}>Cancel</button>
-                </>
-              ) : (
-                <>
-                  <button type="button" onClick={startEdit}>Edit targets ({monthLabel(targetMonth)})</button>
-                  <span className="muted">
-                    {data?.savedTargets ? `Saved targets for ${monthLabel(targetMonth)}` : `No targets saved for ${monthLabel(targetMonth)} — showing Daily Report defaults`}
-                  </span>
-                </>
-              )}
-              {saveMsg && <span className={/saved/.test(saveMsg) ? "pos" : "error"}>{saveMsg}</span>}
-            </div>
-          )}
-
-          <div className="tableWrap">
+          <div className="tableWrap dashTable">
             <table>
               <thead>
                 <tr>
@@ -222,12 +175,7 @@ export default function Dashboard({ initial, user }: {
                   <Fragment key={c.id}>
                     <tr className="click" onClick={() => setOpen(open === c.id ? null : c.id)}>
                       <td>{c.sno}</td><td className="l">{open === c.id ? "▾" : "▸"} {c.name}</td>
-                      <td onClick={(e) => editing && e.stopPropagation()}>
-                        {editing ? (
-                          <input className="targetInput" inputMode="numeric" value={draft[c.id] ?? ""}
-                            onChange={(e) => setDraft((d) => ({ ...d, [c.id]: e.target.value }))} />
-                        ) : inr(c.target)}
-                      </td>
+                      <td>{inr(c.target)}</td>
                       <td>{inr(c.current)}</td><td>{pct(c.achievedPct)}</td>
                       <td>{inr(c.comparison)}</td><td className={c.difference < 0 ? "neg" : "pos"}>{inr(c.difference)}</td>
                       <td>{inr(c.yesterday)}</td><td>{inr(c.product)}</td><td>{inr(c.target80)}</td><td>{inr(c.deficit80)}</td>
