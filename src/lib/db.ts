@@ -11,8 +11,38 @@ const g = globalThis as unknown as { sql?: ReturnType<typeof postgres>; cache?: 
 
 function sql() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
-  g.sql ??= postgres(process.env.DATABASE_URL, { prepare: false, max: 3, ssl: "require", connect_timeout: 15 });
+  g.sql ??= postgres(process.env.DATABASE_URL, {
+    prepare: false, max: 4, ssl: "require", connect_timeout: 10,
+    // Supabase's pooler silently drops idle connections; a query sent on a dropped one hangs.
+    // Close our idle connections first, and never keep one longer than 5 minutes.
+    idle_timeout: 20, max_lifetime: 300,
+  });
   return g.sql;
+}
+
+/**
+ * Run a read query; if it hasn't answered within QUERY_TIMEOUT_MS (normal is well under 1 s), the
+ * connection is assumed dead (e.g. after the serverless function was frozen): throw the client away
+ * and try once more on a fresh connection, instead of making the user wait.
+ */
+const QUERY_TIMEOUT_MS = 6000;
+class QueryTimeout extends Error {}
+async function read<T>(fn: (db: ReturnType<typeof postgres>) => Promise<T>): Promise<T> {
+  const attempt = () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new QueryTimeout()), QUERY_TIMEOUT_MS); });
+    return Promise.race([fn(sql()), timeout]).finally(() => clearTimeout(timer));
+  };
+  try {
+    return await attempt();
+  } catch (e) {
+    if (!(e instanceof QueryTimeout)) throw e;
+    console.warn("DB query timed out — reconnecting and retrying once");
+    const old = g.sql;
+    g.sql = undefined;
+    old?.end({ timeout: 0 }).catch(() => {});
+    return attempt();
+  }
 }
 
 /**
@@ -41,8 +71,7 @@ export function clearCache(prefix: string) {
  */
 export function fetchSales(ranges: Range[]): Promise<SaleRow[]> {
   const merged = mergeRanges(ranges);
-  return cached(`sales:${merged.map((r) => `${r.from}_${r.to}`).join(",")}`, async () => {
-    const db = sql();
+  return cached(`sales:${merged.map((r) => `${r.from}_${r.to}`).join(",")}`, () => read(async (db) => {
     const where = merged
       .map((r) => db`(sale_date between ${r.from}::date and ${r.to}::date)`)
       .reduce((acc, f) => db`${acc} or ${f}`);
@@ -58,7 +87,7 @@ export function fetchSales(ranges: Range[]): Promise<SaleRow[]> {
       from sales_dash.collections
       where ${where}
       group by 1, 2, 3, 4, 5`;
-  });
+  }));
 }
 
 /** Center targets saved for a month ("YYYY-MM-01"), keyed by our CenterId. Missing centers = not saved. */
@@ -67,10 +96,10 @@ export function fetchTargets(month: string, opts: { fresh?: boolean } = {}): Pro
 }
 
 async function fetchTargetsUncached(month: string): Promise<Partial<Record<CenterId, number>>> {
-  const rows = await sql()<{ zenoti_name: string; target: number }[]>`
+  const rows = await read((db) => db<{ zenoti_name: string; target: number }[]>`
     select c.zenoti_name, t.target::float8 as target
     from sales_dash.targets t join sales_dash.centers c using (center_id)
-    where t.month = ${month}::date and t.sold_by is null`;
+    where t.month = ${month}::date and t.sold_by is null`);
   const out: Partial<Record<CenterId, number>> = {};
   for (const r of rows) {
     const c = CENTERS.find((x) => x.zenoti.toLowerCase() === r.zenoti_name.toLowerCase());
@@ -82,8 +111,8 @@ async function fetchTargetsUncached(month: string): Promise<Partial<Record<Cente
 /** Sales-person targets saved for a month, keyed by personKey(name). */
 export function fetchPersonTargets(month: string, opts: { fresh?: boolean } = {}): Promise<Record<string, number>> {
   const run = async () => {
-    const rows = await sql()<{ sold_by: string; target: number }[]>`
-      select sold_by, target::float8 as target from sales_dash.targets where month = ${month}::date and sold_by is not null`;
+    const rows = await read((db) => db<{ sold_by: string; target: number }[]>`
+      select sold_by, target::float8 as target from sales_dash.targets where month = ${month}::date and sold_by is not null`);
     return Object.fromEntries(rows.map((r) => [personKey(r.sold_by), r.target]));
   };
   return opts.fresh ? run() : cached(`targets:people:${month}`, run);
@@ -99,8 +128,8 @@ export interface Submission { submitted_by: string; submitted_at: string }
 /** Who submitted a month's targets and when (sales_dash.target_submissions). null = no record. */
 export async function fetchSubmission(month: string): Promise<Submission | null> {
   try {
-    const rows = await sql()<Submission[]>`
-      select submitted_by, submitted_at::text as submitted_at from sales_dash.target_submissions where month = ${month}::date`;
+    const rows = await read((db) => db<Submission[]>`
+      select submitted_by, submitted_at::text as submitted_at from sales_dash.target_submissions where month = ${month}::date`);
     return rows[0] ?? null;
   } catch (e) {
     if (e instanceof Error && /does not exist/i.test(e.message)) return null; // table not created yet
@@ -147,5 +176,5 @@ export async function submitTargetsOnce(
 }
 
 export function fetchFreshness(): Promise<unknown> {
-  return cached("freshness", async () => (await sql()`select * from sales_dash.v_freshness`)[0] ?? null);
+  return cached("freshness", async () => (await read((db) => db`select * from sales_dash.v_freshness`))[0] ?? null);
 }
