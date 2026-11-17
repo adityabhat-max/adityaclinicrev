@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Tabs from "./Tabs";
 import { useStickyTable } from "./useStickyTable";
+import YearTargets from "./YearTargets";
 import { CENTERS, type CenterId } from "@/lib/centers";
 import { monthLabel } from "@/lib/dates";
 import { planErrors, type RosterPerson } from "@/lib/targets";
@@ -24,8 +25,8 @@ const okNum = (v: string | undefined) => !blank(v) && Number.isFinite(num(v)) &&
 
 export default function TargetsEditor({ user, months }: { user: { name: string; role: Role }; months: string[] }) {
   const present = months[0]; // the only month that can ever be edited
-  const [month, setMonth] = useState(present);
-  const [monthList, setMonthList] = useState<string[]>(months);
+  const month = present; // the form below is for the present month only; earlier months are in the year table
+  const [refreshKey, setRefreshKey] = useState(0);
   const [data, setData] = useState<MonthData | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});   // center id → value
   const [pdraft, setPdraft] = useState<Record<string, string>>({}); // person name → value
@@ -43,7 +44,6 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
     if (!res.ok) { setError(j.error ?? "Could not load targets"); setData(null); return; }
     const d = j as MonthData;
     setData(d);
-    if (d.months?.length) setMonthList(d.months);
     setDraft(Object.fromEntries(CENTERS.map((c) => [c.id, String(Math.round(d.targets[c.id] ?? 0))])));
     setPdraft(Object.fromEntries(d.roster.map((p) => [p.name, d.people[p.name] == null ? "" : String(Math.round(d.people[p.name]!))])));
   }, []);
@@ -94,6 +94,7 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
     setSaving(false);
     if (!res.ok) { setError(j.error ?? "Could not save targets"); if (res.status === 409) load(month); return; }
     await load(month);
+    setRefreshKey((k) => k + 1); // year table picks up the submitted month
     setDone(`Targets for ${label} submitted and locked.`);
   }
 
@@ -112,13 +113,7 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
       </header>
 
       <section className="filters">
-        <label>Month
-          <select value={month} onChange={(e) => setMonth(e.target.value)}>
-            {monthList.map((m) => (
-              <option key={m} value={m}>{monthLabel(`${m}-01`)}{m === present ? " (current)" : " — view only"}</option>
-            ))}
-          </select>
-        </label>
+        <div className="monthTag">Editable month<b>{label}</b></div>
         <Tabs active="targets" role={user.role} />
       </section>
 
@@ -126,6 +121,9 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
         <span className="who">{user.name} <span className={`badge ${user.role}`}>{user.role.toUpperCase()}</span></span>
       </p>
 
+      <YearTargets refreshKey={refreshKey} />
+
+      <h2 className="formTitle">{label} — {data?.editable ? "submit targets (one time)" : "submitted targets"}</h2>
       {loading && <p className="muted">Loading…</p>}
       {error && <p className="error">{error}</p>}
       {done && <p className="pos">{done}</p>}

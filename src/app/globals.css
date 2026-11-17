@@ -50,6 +50,28 @@ tfoot td { position: relative; z-index: 3; transform: translateY(var(--foot-y, 0
 .tabs a { padding: 6px 14px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13px; }
 .tabs a.active { background: var(--head); color: var(--head-text); border-color: var(--head); }
 .tabs a:not(.active):hover { background: var(--sub); }
+/* Targets page — year table (centers × months), quarter filter, draggable month columns */
+.yearTargets { margin-bottom: 20px; }
+.yearBar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 8px; }
+.yearBar h2, .formTitle { font-size: 16px; margin: 0; }
+.formTitle { margin: 6px 0 10px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: none; border-radius: 0; border-right: 1px solid var(--line); padding: 5px 12px; cursor: pointer; font-size: 13px; }
+.seg button:last-child { border-right: none; }
+.seg button.on { background: var(--head); color: var(--head-text); }
+.seg button:not(.on):not(:disabled):hover { background: var(--sub); }
+.yearTable { width: fit-content; max-width: 100%; }
+.yearTable th.drag { cursor: grab; user-select: none; }
+/* Center names stay visible while scrolling sideways through the months */
+.yearTable th:first-child, .yearTable td:first-child { position: sticky; left: 0; z-index: 4; box-shadow: 1px 0 0 var(--line); }
+.yearTable tbody td:first-child, .yearTable tfoot td:first-child { background: var(--surface); }
+.yearTable th.drag:active { cursor: grabbing; }
+.yearTable th .grip { opacity: .6; margin-right: 2px; }
+.yearTable th.dragging { opacity: .45; }
+.yearTable th.dropHere { box-shadow: inset 3px 0 0 #f5b041, 0 1px 0 var(--line); }
+.yearTable th.current { background: #2e5c8a; }
+.yearTable td.current { background: var(--sub); font-weight: 600; }
+.thNote { font-size: 10px; font-weight: 400; opacity: .85; }
 .targetsTable { max-width: 820px; }
 .targetsTable tr.centerRow td { border-top: 2px solid var(--line); }
 .targetsTable td.person { padding-left: 24px; }

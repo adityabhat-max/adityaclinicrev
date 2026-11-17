@@ -118,6 +118,20 @@ export function fetchPersonTargets(month: string, opts: { fresh?: boolean } = {}
   return opts.fresh ? run() : cached(`targets:people:${month}`, run);
 }
 
+/** Saved center targets for every month from `from` to `to` ("YYYY-MM-01"), keyed "YYYY-MM" → CenterId → target. */
+export async function fetchTargetsBetween(from: string, to: string): Promise<Record<string, Partial<Record<CenterId, number>>>> {
+  const rows = await read((db) => db<{ m: string; zenoti_name: string; target: number }[]>`
+    select to_char(t.month, 'YYYY-MM') as m, c.zenoti_name, t.target::float8 as target
+    from sales_dash.targets t join sales_dash.centers c using (center_id)
+    where t.month between ${from}::date and ${to}::date and t.sold_by is null`);
+  const out: Record<string, Partial<Record<CenterId, number>>> = {};
+  for (const r of rows) {
+    const c = CENTERS.find((x) => x.zenoti.toLowerCase() === r.zenoti_name.toLowerCase());
+    if (c) (out[r.m] ??= {})[c.id] = r.target;
+  }
+  return out;
+}
+
 /** Months ("YYYY-MM") that have any saved targets, newest first. */
 export async function fetchTargetMonths(): Promise<string[]> {
   const rows = await read((db) => db<{ m: string }[]>`
