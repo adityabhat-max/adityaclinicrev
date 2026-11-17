@@ -41,7 +41,23 @@ export interface ReportInput {
   owners?: string[];
   /** Targets saved for the month; centers missing here use the Daily Report default. */
   targets?: Partial<Record<CenterId, number>>;
+  /** Cross-branch 50/50 splits (payment lines of split invoices). Empty/absent = report exactly as before. */
+  splits?: SplitLine[];
 }
+
+/**
+ * One payment line of an invoice that was split 50/50 with the client's home branch.
+ * Half of it is taken from where the line is normally credited (its seller, or the invoice branch if the
+ * seller isn't on the roster) and given to `to_person` at `to_center`.
+ */
+export interface SplitLine extends SaleRow {
+  split_id: number;
+  to_center: CenterId;
+  to_person: string;
+}
+
+/** The share of a split invoice that goes to the home branch. */
+export const SPLIT_SHARE = 0.5;
 
 export interface Figures { current: number; comparison: number | null; yesterday: number; product: number }
 
@@ -51,9 +67,11 @@ export interface CenterLine extends Figures {
   id: CenterId; sno: number; name: string; target: number;
   achievedPct: number | null; difference: number; target80: number; deficit80: number;
   owners: OwnerLine[]; noSalesOwner: Figures;
+  /** Cross-branch split amounts not tied to a rostered person (all zero when there are no splits). */
+  splitAdjustment: Figures;
 }
 
-export interface Report { centers: CenterLine[]; total: Omit<CenterLine, "id" | "sno" | "name" | "owners" | "noSalesOwner"> }
+export interface Report { centers: CenterLine[]; total: Omit<CenterLine, "id" | "sno" | "name" | "owners" | "noSalesOwner" | "splitAdjustment"> }
 
 const key = (s: string | null | undefined) => (s ?? "").toLowerCase(); // SUMIFS/MATCH are case-insensitive
 const CURRENT_TYPES = new Set(["package", "pre-paid card", "service", "gift card"]);
@@ -153,30 +171,91 @@ export function buildReport(input: ReportInput): Report {
     raw.set(c.id, { owners, nso: nsoLine, product });
   }
 
+  // ---- cross-branch 50/50 splits ----
+  // Applied AFTER everything above, as plain ± amounts (the sheet's quirks don't touch them).
+  // With no splits every delta is 0, so all figures stay exactly as before.
+  const split = new Map<CenterId, Figures>(CENTERS.map((c) => [c.id, z()]));   // not tied to a rostered person
+  const ownerDelta = new Map<string, Figures>();                                // key(person) → ±
+  const addTo = (f: Figures, d: Figures, sign: 1 | -1) => {
+    f.current += sign * d.current; f.yesterday += sign * d.yesterday; f.product += sign * d.product;
+    f.comparison = (f.comparison ?? 0) + sign * (d.comparison ?? 0);
+  };
+  for (const s of input.splits ?? []) {
+    if (s.internal ?? isInternalAdjustment(s.payment_type)) continue;
+    const type = key(s.item_type);
+    const isProduct = type === PRODUCT;
+    if (!isProduct && !CURRENT_TYPES.has(type)) continue;
+    const seller = key(s.sold_by);
+    const sellerOnRoster = ownerCenter.has(seller);
+    // a blank-seller line was never counted (sheet rule), so there is nothing to move
+    if (!isProduct && !sellerOnRoster && seller.trim() === "" && compat.blankSellerDropped) continue;
+    const half = (Number(s.collected) || 0) * SPLIT_SHARE;
+    if (!half) continue;
+    const d = z();
+    if (isProduct) { if (inRange(s.sale_date, input.current)) d.product = half; }
+    else {
+      if (inRange(s.sale_date, input.current)) d.current = half;
+      if (inRange(s.sale_date, input.comparison)) d.comparison = half;
+      if (s.sale_date === input.yesterday) d.yesterday = half;
+    }
+    if (!d.current && !d.comparison && !d.yesterday && !d.product) continue;
+
+    // take half from where the line is credited …
+    if (sellerOnRoster) addTo(ownerDelta.get(seller) ?? ownerDelta.set(seller, z()).get(seller)!, d, -1);
+    else {
+      const from = CENTERS.find((c) => key(c.zenoti) === key(s.center_name));
+      if (from) addTo(split.get(from.id)!, d, -1);
+    }
+    // … and give it to the chosen person at the home branch
+    const to = key(s.to_person);
+    if (ownerCenter.get(to) === s.to_center) addTo(ownerDelta.get(to) ?? ownerDelta.set(to, z()).get(to)!, d, 1);
+    else addTo(split.get(s.to_center)!, d, 1);
+  }
+  if (ownerDelta.size || [...split.values()].some((f) => f.current || f.comparison || f.yesterday || f.product)) {
+    for (const c of CENTERS) {
+      const r = raw.get(c.id)!;
+      let productDelta = 0;
+      r.owners = r.owners.map((o) => {
+        const d = ownerDelta.get(key(o.name));
+        if (!d) return o;
+        productDelta += d.product;
+        return { ...o, current: o.current + d.current, yesterday: o.yesterday + d.yesterday,
+          product: o.product + d.product, comparison: (o.comparison ?? 0) + (d.comparison ?? 0) };
+      });
+      const sa = split.get(c.id)!;
+      if (ownerFilter) {
+        // a sales-owner filter shows only those people's own lines (same formula as above, on the adjusted rows)
+        split.set(c.id, z());
+        r.product = r.owners.reduce((s, o) => s + o.product, 0);
+      } else r.product += productDelta + sa.product;
+    }
+  }
+
   const sum = (xs: Figures[], k: keyof Figures) => xs.reduce((s, x) => s + (x[k] ?? 0), 0);
   const comparisonOf = (id: CenterId): number | null => {
     if (compat.comparisonBlank.includes(id)) return null;
     const r = raw.get(id)!;
-    let v = sum(r.owners, "comparison") + (r.nso.comparison ?? 0);
+    let v = sum(r.owners, "comparison") + (r.nso.comparison ?? 0) + (split.get(id)!.comparison ?? 0);
     if (id === "KKDM" && compat.karkardoomaComparisonIncludesLudhiana) v += comparisonOf("LUH") ?? 0;
     return v;
   };
 
   const lines: CenterLine[] = CENTERS.map((c, i) => {
     const r = raw.get(c.id)!;
-    const current = sum(r.owners, "current") + r.nso.current;
+    const sa = split.get(c.id)!;
+    const current = sum(r.owners, "current") + r.nso.current + sa.current;
     const comparison = comparisonOf(c.id);
     const target = input.targets?.[c.id] ?? c.target;
     return {
       id: c.id, sno: i + 1, name: c.name, target,
       current, comparison,
-      yesterday: sum(r.owners, "yesterday") + r.nso.yesterday,
+      yesterday: sum(r.owners, "yesterday") + r.nso.yesterday + sa.yesterday,
       product: r.product,
       achievedPct: target ? current / target : null,
       difference: current - (comparison ?? 0),
       target80: target * 0.8,
       deficit80: target * 0.8 - current,
-      owners: r.owners, noSalesOwner: r.nso,
+      owners: r.owners, noSalesOwner: r.nso, splitAdjustment: sa,
     };
   });
 

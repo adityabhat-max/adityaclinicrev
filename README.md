@@ -55,6 +55,36 @@ Sales-person targets are stored in the same table (`center_id` null, `sold_by` =
 submitted together with the center targets, each center's people must add up to exactly the center target,
 and they only appear in the dashboard's drill-down rows — they never change any center or total figure.
 
+## Cross-branch 50/50 splits (setup, once)
+When a client registered at one branch buys at another, the admin records the visiting branch's invoice on the
+**50/50 Splits** tab; half of every payment line of that invoice moves from its seller to the chosen person at the
+client's home branch. Splits are insert-only; cancelling stamps who/when/why and keeps the record.
+```sql
+create table if not exists sales_dash.invoice_splits (
+  id            bigserial primary key,
+  invoice_no    text not null,
+  client_name   text,
+  from_center   text not null,          -- Zenoti center of the invoice (snapshot)
+  from_seller   text,                   -- seller(s) on the invoice (snapshot)
+  to_center_id  text not null references sales_dash.centers(center_id),
+  to_person     text not null,          -- roster name at the home branch
+  share         numeric not null default 0.5 check (share = 0.5),
+  invoice_total numeric not null,       -- amount paid when split (snapshot)
+  note          text,
+  created_by    text not null,
+  created_at    timestamptz not null default now(),
+  cancelled_by  text,
+  cancelled_at  timestamptz,
+  cancel_reason text
+);
+create unique index if not exists invoice_splits_active_uq on sales_dash.invoice_splits (invoice_no) where cancelled_at is null;
+grant select, insert on sales_dash.invoice_splits to dashboard_ro;
+grant usage on sequence sales_dash.invoice_splits_id_seq to dashboard_ro;
+grant update (cancelled_by, cancelled_at, cancel_reason) on sales_dash.invoice_splits to dashboard_ro; -- cancel only
+```
+Until this table exists the tab shows "not set up" and the dashboard is unaffected. With no active splits every
+figure is exactly what it was before this feature.
+
 ## Changing locked targets (owner only)
 Targets are submitted once per month from the Targets page and are then locked. To change them, the owner edits
 them in the Supabase SQL Editor, e.g.:

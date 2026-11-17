@@ -41,6 +41,12 @@ export function editableMonths(today: ISODate = todayIST()): string[] {
   return [today.slice(0, 7)];
 }
 
+/** Cross-branch splits may only be added/cancelled for invoices paid on or after this day: 1st of last month. */
+export function splitWindowStart(today: ISODate = todayIST()): ISODate {
+  const [y, m] = parts(today);
+  return m === 1 ? fmt(y - 1, 12, 1) : fmt(y, m - 1, 1);
+}
+
 /** Merge overlapping/adjacent ranges so each day is fetched once. */
 export function mergeRanges(ranges: Range[]): Range[] {
   const sorted = [...ranges].sort((a, b) => a.from.localeCompare(b.from));

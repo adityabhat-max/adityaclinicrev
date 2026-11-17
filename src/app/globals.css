@@ -50,6 +50,21 @@ tfoot td { position: relative; z-index: 3; transform: translateY(var(--foot-y, 0
 .tabs a { padding: 6px 14px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13px; }
 .tabs a.active { background: var(--head); color: var(--head-text); border-color: var(--head); }
 .tabs a:not(.active):hover { background: var(--sub); }
+/* 50/50 Splits page */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; }
+.card h2 { font-size: 16px; margin: 0 0 4px; }
+.splitForm .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 10px 0; }
+.splitForm .row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.splitForm .row label.grow { flex: 1; min-width: 220px; }
+.splitForm .row input[aria-label="Invoice number"] { width: 240px; text-transform: uppercase; }
+.invoiceCard { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 10px; }
+.facts div { display: flex; flex-direction: column; font-size: 13px; }
+.preview { background: var(--sub); border-radius: 6px; padding: 8px 10px; font-size: 13px; display: grid; gap: 4px; }
+tr.cancelled td { opacity: .6; }
+.wrap { white-space: normal; max-width: 260px; }
+.splitNote { margin-left: 10px; }
+
 /* Targets page — year table (centers × months), quarter filter, draggable month columns */
 .yearTargets { margin-bottom: 20px; }
 .yearBar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 8px; }

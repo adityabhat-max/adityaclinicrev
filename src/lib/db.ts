@@ -1,7 +1,7 @@
 import "server-only";
 import postgres from "postgres";
 import { mergeRanges, type Range } from "./dates";
-import { INTERNAL_PATTERN, type SaleRow } from "./report";
+import { INTERNAL_PATTERN, type SaleRow, type SplitLine } from "./report";
 import { CENTERS, type CenterId } from "./centers";
 import { personKey } from "./targets";
 
@@ -192,6 +192,128 @@ export async function submitTargetsOnce(
     if (e instanceof Error && /duplicate key|unique/i.test(e.message)) throw new TargetsLockedError("Targets for this month were already submitted");
     if (e instanceof Error && /target_submissions.*does not exist|relation .* does not exist/i.test(e.message))
       throw new SetupMissingError("sales_dash.target_submissions has not been created yet");
+    throw e;
+  }
+}
+
+// ---------------------------------------------------------------- cross-branch 50/50 splits
+
+const missingTable = (e: unknown) => e instanceof Error && /invoice_splits.*does not exist|relation .* does not exist/i.test(e.message);
+const centerIdByZenoti = (name: string) => CENTERS.find((c) => c.zenoti.toLowerCase() === name.toLowerCase())?.id;
+
+/**
+ * Payment lines (in the given date ranges) of invoices with an ACTIVE split, grouped like fetchSales.
+ * Returns [] when no split exists — or the splits table hasn't been created yet — so the report is unchanged.
+ */
+export function fetchSplitLines(ranges: Range[]): Promise<SplitLine[]> {
+  const merged = mergeRanges(ranges);
+  return cached(`splits:${merged.map((r) => `${r.from}_${r.to}`).join(",")}`, async () => {
+    try {
+      const rows = await read((db) => {
+        const where = merged
+          .map((r) => db`(c.sale_date between ${r.from}::date and ${r.to}::date)`)
+          .reduce((acc, f) => db`${acc} or ${f}`);
+        return db<(SaleRow & { split_id: number; to_center_name: string; to_person: string })[]>`
+          select s.id::int as split_id, ce.zenoti_name as to_center_name, s.to_person,
+                 c.sale_date::text as sale_date, c.item_type, c.center_name, c.sold_by,
+                 (coalesce(c.payment_type, '') ~* ${INTERNAL_PATTERN}) as internal,
+                 sum(coalesce(c.collected, 0))::float8 as collected
+          from sales_dash.invoice_splits s
+          join sales_dash.centers ce on ce.center_id = s.to_center_id
+          join sales_dash.collections c on c.invoice_no = s.invoice_no
+          where s.cancelled_at is null and (${where})
+          group by 1, 2, 3, 4, 5, 6, 7, 8`;
+      });
+      return rows.flatMap((r) => {
+        const to = centerIdByZenoti(r.to_center_name);
+        return to ? [{ ...r, to_center: to }] : [];
+      });
+    } catch (e) {
+      if (missingTable(e)) return [];
+      throw e;
+    }
+  });
+}
+
+export interface InvoiceLine {
+  sale_date: string; item_type: string; item_name: string | null; center_name: string; sold_by: string | null;
+  guest_name: string | null; payment_type: string | null; collected: number; internal: boolean;
+}
+
+/** Every payment line of one invoice (case-insensitive invoice number). */
+export async function lookupInvoice(invoiceNo: string): Promise<InvoiceLine[]> {
+  return read((db) => db<InvoiceLine[]>`
+    select sale_date::text as sale_date, item_type, item_name, center_name, sold_by, guest_name, payment_type,
+           coalesce(collected, 0)::float8 as collected, (coalesce(payment_type, '') ~* ${INTERNAL_PATTERN}) as internal
+    from sales_dash.collections where upper(invoice_no) = upper(${invoiceNo})
+    order by sale_date, item_type`);
+}
+
+export interface SplitRecord {
+  id: number; invoice_no: string; client_name: string | null; from_center: string; from_seller: string | null;
+  to_center_id: string; to_center_name: string; to_person: string; invoice_total: number; note: string | null;
+  created_by: string; created_at: string; cancelled_by: string | null; cancelled_at: string | null; cancel_reason: string | null;
+}
+
+/** The full split log, newest first. null = the table hasn't been created yet. */
+export async function listSplits(): Promise<SplitRecord[] | null> {
+  try {
+    return await read((db) => db<SplitRecord[]>`
+      select s.id::int as id, s.invoice_no, s.client_name, s.from_center, s.from_seller, s.to_center_id,
+             ce.zenoti_name as to_center_name, s.to_person, s.invoice_total::float8 as invoice_total, s.note,
+             s.created_by, s.created_at::text as created_at, s.cancelled_by, s.cancelled_at::text as cancelled_at, s.cancel_reason
+      from sales_dash.invoice_splits s join sales_dash.centers ce on ce.center_id = s.to_center_id
+      order by s.created_at desc, s.id desc`);
+  } catch (e) {
+    if (missingTable(e)) return null;
+    throw e;
+  }
+}
+
+/** The active split of an invoice, if any. */
+export async function activeSplitFor(invoiceNo: string): Promise<SplitRecord | null> {
+  const all = await listSplits();
+  return all?.find((s) => !s.cancelled_at && s.invoice_no.toUpperCase() === invoiceNo.toUpperCase()) ?? null;
+}
+
+export class AlreadySplitError extends Error {}
+
+export interface NewSplit {
+  invoice_no: string; client_name: string | null; from_center: string; from_seller: string | null;
+  to_center: CenterId; to_person: string; invoice_total: number; note: string | null;
+}
+
+/** Record a split (insert only). The unique index allows one active split per invoice. */
+export async function addSplit(s: NewSplit, createdBy: string): Promise<void> {
+  const db = sql();
+  const zen = CENTERS.find((c) => c.id === s.to_center)!.zenoti;
+  try {
+    const [center] = await db<{ center_id: string }[]>`
+      select center_id from sales_dash.centers where lower(zenoti_name) = lower(${zen})`;
+    if (!center) throw new Error(`Center ${s.to_center} not found in sales_dash.centers`);
+    await db`
+      insert into sales_dash.invoice_splits
+        (invoice_no, client_name, from_center, from_seller, to_center_id, to_person, share, invoice_total, note, created_by)
+      values (${s.invoice_no}, ${s.client_name}, ${s.from_center}, ${s.from_seller}, ${center.center_id}, ${s.to_person},
+              0.5, ${s.invoice_total}, ${s.note}, ${createdBy})`;
+    clearCache("splits:");
+  } catch (e) {
+    if (e instanceof Error && /duplicate key|unique/i.test(e.message)) throw new AlreadySplitError("This invoice is already split");
+    if (missingTable(e)) throw new SetupMissingError("sales_dash.invoice_splits has not been created yet");
+    throw e;
+  }
+}
+
+/** Cancel an active split — it stays in the log with who, when and why. Returns false if it wasn't active. */
+export async function cancelSplit(id: number, cancelledBy: string, reason: string): Promise<boolean> {
+  try {
+    const rows = await sql()`
+      update sales_dash.invoice_splits set cancelled_by = ${cancelledBy}, cancelled_at = now(), cancel_reason = ${reason}
+      where id = ${id} and cancelled_at is null returning id`;
+    clearCache("splits:");
+    return rows.length > 0;
+  } catch (e) {
+    if (missingTable(e)) throw new SetupMissingError("sales_dash.invoice_splits has not been created yet");
     throw e;
   }
 }

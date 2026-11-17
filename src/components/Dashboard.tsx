@@ -15,6 +15,8 @@ interface Payload {
   targetMonth?: string; savedTargets?: number;
   /** Sales-person targets for the month, keyed by lower-case name (display only). */
   personTargets?: Record<string, number>;
+  /** Active cross-branch splits touching the shown dates; splitsError = they could not be loaded. */
+  splitCount?: number; splitsError?: boolean;
 }
 
 const inr = (n: number | null | undefined) =>
@@ -160,6 +162,10 @@ export default function Dashboard({ initial, user }: {
           </span>
         )}
         <span className="who">{user.name} <span className={`badge ${user.role}`}>{user.role.toUpperCase()}</span></span>
+        {!!data?.splitCount && (
+          <a className="splitNote muted" href="/splits">Includes {data.splitCount} cross-branch 50/50 split{data.splitCount > 1 ? "s" : ""}</a>
+        )}
+        {data?.splitsError && <span className="splitNote error">Cross-branch splits could not be loaded — figures shown without them.</span>}
       </p>
       {error && <p className="error">{error}</p>}
 
@@ -195,7 +201,13 @@ export default function Dashboard({ initial, user }: {
                       <td>{inr(c.comparison)}</td><td className={c.difference < 0 ? "neg" : "pos"}>{inr(c.difference)}</td>
                       <td>{inr(c.yesterday)}</td><td>{inr(c.product)}</td><td>{inr(c.target80)}</td><td>{inr(c.deficit80)}</td>
                     </tr>
-                    {open === c.id && [...c.owners, { name: "No Sales Owner", nso: true, ...c.noSalesOwner }].map((o) => {
+                    {open === c.id && [
+                      ...c.owners, { name: "No Sales Owner", nso: true, ...c.noSalesOwner },
+                      // only when a split moved money that isn't tied to a rostered person
+                      ...(c.splitAdjustment && (c.splitAdjustment.current || c.splitAdjustment.comparison
+                        || c.splitAdjustment.yesterday || c.splitAdjustment.product)
+                        ? [{ name: "Split adjustment (50/50)", nso: true, ...c.splitAdjustment }] : []),
+                    ].map((o) => {
                       // Person target: same formulas as the center row (Achieved % = current ÷ target, 80% = target × 0.8).
                       const t = "nso" in o ? undefined : data?.personTargets?.[o.name.toLowerCase()];
                       return (
