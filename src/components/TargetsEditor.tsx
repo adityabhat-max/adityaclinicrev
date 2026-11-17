@@ -6,12 +6,18 @@ import { CENTERS, type CenterId } from "@/lib/centers";
 import { monthLabel } from "@/lib/dates";
 import type { Role } from "@/lib/auth";
 
-interface MonthData { month: string; locked: boolean; editable: boolean; targets: Record<CenterId, number> }
+interface MonthData {
+  month: string; locked: boolean; editable: boolean; targets: Record<CenterId, number>;
+  submittedBy: string | null; submittedAt: string | null;
+}
+
+const when = (ts: string) =>
+  new Date(ts.replace(" ", "T")).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 
 const inr = (n: number) => `₹${Math.round(n).toLocaleString("en-US")}`;
 
 export default function TargetsEditor({ user, months }: { user: { name: string; role: Role }; months: string[] }) {
-  const [month, setMonth] = useState(months[0]);
+  const month = months[0]; // only the present month
   const [data, setData] = useState<MonthData | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -67,11 +73,7 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
       </header>
 
       <section className="filters">
-        <label>Month
-          <select value={month} onChange={(e) => setMonth(e.target.value)}>
-            {months.map((m) => <option key={m} value={m}>{monthLabel(`${m}-01`)}</option>)}
-          </select>
-        </label>
+        <div className="monthTag">Month<b>{label}</b></div>
         <Tabs active="targets" role={user.role} />
       </section>
 
@@ -87,8 +89,10 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
         <>
           <p className={data.locked ? "lockNote" : "openNote"}>
             {data.locked
-              ? `🔒 Targets for ${label} have been submitted and are locked. To change them, contact the dashboard owner.`
-              : `Targets for ${label} have not been submitted yet. The dashboard currently uses the default targets shown below. You can submit once — after that they are locked.`}
+              ? <>🔒 Targets for {label} are locked
+                  {data.submittedAt ? <> — submitted by <b>{data.submittedBy}</b> on <b>{when(data.submittedAt)}</b></> : " (set in the database)"}.
+                  {" "}To change them, contact the dashboard owner.</>
+              : `Targets for ${label} have not been submitted yet. The values below are the Daily Report (Google Sheet) targets that the dashboard uses now. You can submit once — after that they are locked.`}
           </p>
 
           <div className="tableWrap targetsTable">

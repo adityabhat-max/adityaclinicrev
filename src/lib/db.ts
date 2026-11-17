@@ -49,14 +49,29 @@ export async function fetchTargets(month: string): Promise<Partial<Record<Center
 }
 
 export class TargetsLockedError extends Error {}
+export class SetupMissingError extends Error {}
+
+export interface Submission { submitted_by: string; submitted_at: string }
+
+/** Who submitted a month's targets and when (sales_dash.target_submissions). null = no record. */
+export async function fetchSubmission(month: string): Promise<Submission | null> {
+  try {
+    const rows = await sql()<Submission[]>`
+      select submitted_by, submitted_at::text as submitted_at from sales_dash.target_submissions where month = ${month}::date`;
+    return rows[0] ?? null;
+  } catch (e) {
+    if (e instanceof Error && /does not exist/i.test(e.message)) return null; // table not created yet
+    throw e;
+  }
+}
 
 /**
- * Submit center targets for a month — ONE time only. Plain INSERTs (no update): if any center already
- * has a target for that month, the unique index (month, center_id) rejects it and the whole submission
- * rolls back. Give the app's DB role INSERT but not UPDATE on sales_dash.targets so the database itself
- * enforces the lock; changes after submission are made by the owner directly in Supabase.
+ * Submit center targets for a month — ONE time only, recording who and when.
+ * The submission row (primary key = month) and plain INSERTs into sales_dash.targets (unique per
+ * month+center) make a second submission fail and roll back. Give the app's DB role INSERT but not
+ * UPDATE/DELETE so the database itself enforces the lock; the owner changes targets in Supabase.
  */
-export async function submitTargetsOnce(month: string, targets: Record<CenterId, number>): Promise<void> {
+export async function submitTargetsOnce(month: string, targets: Record<CenterId, number>, submittedBy: string): Promise<void> {
   const db = sql();
   const centers = await db<{ center_id: string; zenoti_name: string }[]>`select center_id, zenoti_name from sales_dash.centers`;
   try {
@@ -64,6 +79,7 @@ export async function submitTargetsOnce(month: string, targets: Record<CenterId,
       const [{ n }] = await tx<{ n: number }[]>`
         select count(*)::int n from sales_dash.targets where month = ${month}::date and center_id is not null and sold_by is null`;
       if (n > 0) throw new TargetsLockedError("Targets for this month were already submitted");
+      await tx`insert into sales_dash.target_submissions (month, submitted_by, submitted_at) values (${month}::date, ${submittedBy}, now())`;
       for (const [id, value] of Object.entries(targets) as [CenterId, number][]) {
         const zen = CENTERS.find((c) => c.id === id)?.zenoti.toLowerCase();
         const centerId = centers.find((c) => c.zenoti_name.toLowerCase() === zen)?.center_id;
@@ -74,6 +90,8 @@ export async function submitTargetsOnce(month: string, targets: Record<CenterId,
   } catch (e) {
     if (e instanceof TargetsLockedError) throw e;
     if (e instanceof Error && /duplicate key|unique/i.test(e.message)) throw new TargetsLockedError("Targets for this month were already submitted");
+    if (e instanceof Error && /target_submissions.*does not exist|relation .* does not exist/i.test(e.message))
+      throw new SetupMissingError("sales_dash.target_submissions has not been created yet");
     throw e;
   }
 }

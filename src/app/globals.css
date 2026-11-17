@@ -50,6 +50,8 @@ tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--surface); 
 .tabs a.active { background: var(--head); color: var(--head-text); border-color: var(--head); }
 .tabs a:not(.active):hover { background: var(--sub); }
 .targetsTable { max-width: 560px; }
+.monthTag { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.monthTag b { font-size: 15px; color: var(--text); padding: 6px 0; }
 .lockNote, .openNote { font-size: 13px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); }
 .lockNote { border-color: var(--neg); }
 .who { color: var(--text); font-weight: 600; }

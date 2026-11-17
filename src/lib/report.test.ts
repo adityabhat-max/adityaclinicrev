@@ -24,9 +24,9 @@ describe("dates", () => {
     expect(yesterdayFor("2026-11-16", "2026-11-16")).toBe("2026-11-15");
     expect(yesterdayFor("2026-10-31", "2026-11-16")).toBe("2026-10-31");
   });
-  it("admin can submit targets for this month and next month only", () => {
-    expect(editableMonths("2026-11-17")).toEqual(["2026-11", "2026-12"]);
-    expect(editableMonths("2026-12-05")).toEqual(["2026-12", "2027-01"]);
+  it("admin can submit targets for the present month only", () => {
+    expect(editableMonths("2026-11-17")).toEqual(["2026-11"]);
+    expect(editableMonths("2026-12-31")).toEqual(["2026-12"]);
   });
   it("merges overlapping ranges", () => {
     expect(mergeRanges([NOV, OCT, { from: "2026-11-15", to: "2026-11-15" }])).toEqual([OCT, NOV]);

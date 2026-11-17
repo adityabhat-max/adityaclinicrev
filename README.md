@@ -37,6 +37,14 @@ grant usage on schema sales_dash to dashboard_ro;
 grant select on all tables in schema sales_dash to dashboard_ro;
 grant insert on sales_dash.targets to dashboard_ro;            -- admin submits targets (once per month)
 revoke update, delete on sales_dash.targets from dashboard_ro; -- so submitted targets can't be changed by the app
+
+-- record of who submitted each month's targets and when
+create table if not exists sales_dash.target_submissions (
+  month        date primary key,
+  submitted_by text not null,
+  submitted_at timestamptz not null default now()
+);
+grant select, insert on sales_dash.target_submissions to dashboard_ro;
 ```
 
 ## Changing locked targets (owner only)
@@ -50,4 +58,6 @@ where t.center_id = c.center_id and t.month = '2026-11-01' and c.zenoti_name = '
 
 -- or reopen the whole month so the admin can submit again
 delete from sales_dash.targets where month = '2026-11-01' and sold_by is null;
+delete from sales_dash.target_submissions where month = '2026-11-01';
 ```
+The admin can only submit targets for the present month.
