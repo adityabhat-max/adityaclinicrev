@@ -11,6 +11,10 @@ export interface SaleRow {
   sold_by: string | null;
   collected: number;
   payment_type?: string | null;
+  /** Set when rows are pre-grouped in SQL: true = internal adjustment (see below). */
+  internal?: boolean;
+  /** Set when rows are pre-grouped in SQL: how many underlying rows had a non-zero amount. */
+  nonzero?: number;
 }
 
 /**
@@ -18,9 +22,11 @@ export interface SaleRow {
  * a package refunded into a pre-paid card ("Custom - Refund - Internal": a minus line on the
  * original seller + a plus pre-paid line with no seller) and package transfers between guests.
  * The whole row is skipped, even when it also carries another payment method.
+ * The same pattern is used in SQL (case-insensitive) when rows are grouped in the database.
  */
-export const isInternalAdjustment = (paymentType: string | null | undefined) =>
-  /custom - refund - internal|custom - package transfer/i.test(paymentType ?? "");
+export const INTERNAL_PATTERN = "custom - refund - internal|custom - package transfer";
+const INTERNAL_RE = new RegExp(INTERNAL_PATTERN, "i");
+export const isInternalAdjustment = (paymentType: string | null | undefined) => INTERNAL_RE.test(paymentType ?? "");
 
 export interface ReportInput {
   rows: SaleRow[];
@@ -76,9 +82,11 @@ export function buildReport(input: ReportInput): Report {
   const productCenters = new Map<string, string>();
 
   for (const r of input.rows) {
-    if (isInternalAdjustment(r.payment_type)) continue;
+    if (r.internal ?? isInternalAdjustment(r.payment_type)) continue;
     const type = key(r.item_type);
     const amt = Number(r.collected) || 0;
+    // A row "has a value" if any underlying sale line was non-zero (zero lines don't create a pivot row in the sheet).
+    const hasValue = (r.nonzero ?? (amt !== 0 ? 1 : 0)) > 0;
     const isCur = inRange(r.sale_date, input.current);
     const isCmp = inRange(r.sale_date, input.comparison);
     const isY = r.sale_date === input.yesterday;
@@ -89,7 +97,7 @@ export function buildReport(input: ReportInput): Report {
     if (type === PRODUCT) {
       if (isCur) {
         productByCenter.set(ck, (productByCenter.get(ck) ?? 0) + amt);
-        if (amt !== 0) productCenters.set(ck, r.center_name);
+        if (hasValue) productCenters.set(ck, r.center_name);
         if (isOwner) productByOwner.set(owner, (productByOwner.get(owner) ?? 0) + amt);
       }
       continue;
@@ -103,7 +111,7 @@ export function buildReport(input: ReportInput): Report {
     if (isY) f.yesterday += amt;
     if (isCmp && (!isOwner || cmpOwnerTypes.has(type))) f.comparison! += amt;
     // zero-value rows (e.g. package redemptions) don't create a pivot row in the sheet
-    if (!isOwner && isCur && amt !== 0) nsoCurrentCenters.set(ck, r.center_name);
+    if (!isOwner && isCur && hasValue) nsoCurrentCenters.set(ck, r.center_name);
   }
 
   const firstN = (m: Map<string, string>, n: number | null) =>

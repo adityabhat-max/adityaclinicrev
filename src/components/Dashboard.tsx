@@ -46,24 +46,34 @@ export default function Dashboard({ initial, user }: {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const inflight = useRef<AbortController | null>(null);
   const load = useCallback(async () => {
+    inflight.current?.abort(); // a newer request replaces an older one still loading
+    const ac = new AbortController();
+    inflight.current = ac;
     setLoading(true);
     const q = new URLSearchParams({
       curFrom: current.from, curTo: current.to, cmpFrom: comparison.from, cmpTo: comparison.to,
       centers: centers.join(","), owners: owner,
     });
     try {
-      const res = await fetch(`/api/report?${q}`, { cache: "no-store" });
+      const res = await fetch(`/api/report?${q}`, { cache: "no-store", signal: ac.signal });
       if (res.status === 401) { window.location.href = "/login"; return; }
       const json = (await res.json()) as Payload;
       if (!res.ok) throw new Error(json.error ?? res.statusText);
-      setData(json); setError("");
+      if (!ac.signal.aborted) { setData(json); setError(""); }
     } catch (e) {
+      if (ac.signal.aborted) return;
       setError(e instanceof Error ? e.message : "Failed to load");
-    } finally { setLoading(false); }
+    } finally { if (!ac.signal.aborted) setLoading(false); }
   }, [current, comparison, centers, owner]);
 
-  useEffect(() => { load(); const t = setInterval(load, REFRESH_MS); return () => clearInterval(t); }, [load]);
+  // Wait briefly after a filter change (e.g. while picking dates) before loading; auto-refresh every 5 min.
+  useEffect(() => {
+    const t = setTimeout(load, 350);
+    const i = setInterval(load, REFRESH_MS);
+    return () => { clearTimeout(t); clearInterval(i); };
+  }, [load]);
 
   const ownerOptions = useMemo(
     () => (centers.length ? centers : CENTERS.map((c) => c.id)).flatMap((id) => ROSTER[id].map((n) => ({ n, id }))),

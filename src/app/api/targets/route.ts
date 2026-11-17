@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
   const month = req.nextUrl.searchParams.get("month") ?? "";
   if (!MONTH.test(month)) return NextResponse.json({ error: "Invalid month" }, { status: 400 });
   try {
-    const [saved, submission] = await Promise.all([fetchTargets(`${month}-01`), fetchSubmission(`${month}-01`)]);
+    const [saved, submission] = await Promise.all([fetchTargets(`${month}-01`, { fresh: true }), fetchSubmission(`${month}-01`)]);
     const locked = Object.keys(saved).length > 0 || !!submission;
     const targets = Object.fromEntries(CENTERS.map((c) => [c.id, saved[c.id] ?? c.target]));
     return NextResponse.json({

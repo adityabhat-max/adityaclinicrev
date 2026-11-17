@@ -1,41 +1,71 @@
 import "server-only";
 import postgres from "postgres";
 import { mergeRanges, type Range } from "./dates";
-import type { SaleRow } from "./report";
+import { INTERNAL_PATTERN, type SaleRow } from "./report";
 import { CENTERS, type CenterId } from "./centers";
 
 // Direct Postgres connection: sales_dash is not exposed through the Supabase REST API.
-// Use a read-only role and the transaction pooler (port 6543) on Vercel.
-const globalForSql = globalThis as unknown as { sql?: ReturnType<typeof postgres> };
+// Use the transaction pooler (port 6543); run the functions in Mumbai (vercel.json) next to the database.
+const g = globalThis as unknown as { sql?: ReturnType<typeof postgres>; cache?: Map<string, { at: number; p: Promise<unknown> }> };
 
 function sql() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
-  globalForSql.sql ??= postgres(process.env.DATABASE_URL, { prepare: false, max: 3, ssl: "require" });
-  return globalForSql.sql;
+  g.sql ??= postgres(process.env.DATABASE_URL, { prepare: false, max: 3, ssl: "require", connect_timeout: 15 });
+  return g.sql;
 }
 
-/** Rows of sales_dash.collections whose payment date falls in any of the ranges. */
-export async function fetchSales(ranges: Range[]): Promise<SaleRow[]> {
-  const db = sql();
-  const out: SaleRow[] = [];
-  for (const r of mergeRanges(ranges)) {
+/**
+ * Short-lived in-memory cache per server instance. Zenoti syncs every 30 min, so reusing a result for
+ * 60 s hides nothing, but makes filter changes (center / sales owner) instant instead of re-querying.
+ */
+const TTL_MS = 60_000;
+function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  g.cache ??= new Map();
+  const hit = g.cache.get(key);
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.p as Promise<T>;
+  const p = fn();
+  g.cache.set(key, { at: Date.now(), p });
+  p.catch(() => g.cache?.delete(key));
+  if (g.cache.size > 200) g.cache.delete(g.cache.keys().next().value as string);
+  return p;
+}
+export function clearCache(prefix: string) {
+  for (const k of g.cache?.keys() ?? []) if (k.startsWith(prefix)) g.cache!.delete(k);
+}
+
+/**
+ * Sales of sales_dash.collections whose payment date falls in any of the ranges — one query, with
+ * identical rows (same day, item type, center, seller, internal-adjustment flag) summed in the database.
+ * `nonzero` keeps how many underlying lines were non-zero, so the engine gives the same results as raw rows.
+ */
+export function fetchSales(ranges: Range[]): Promise<SaleRow[]> {
+  const merged = mergeRanges(ranges);
+  return cached(`sales:${merged.map((r) => `${r.from}_${r.to}`).join(",")}`, async () => {
+    const db = sql();
+    const where = merged
+      .map((r) => db`(sale_date between ${r.from}::date and ${r.to}::date)`)
+      .reduce((acc, f) => db`${acc} or ${f}`);
     // sale_date is a `date` column (payment date, already in IST).
-    const rows = await db<SaleRow[]>`
-      select item_type,
-             sale_date::date::text as sale_date,
+    return db<SaleRow[]>`
+      select sale_date::text as sale_date,
+             item_type,
              center_name,
              sold_by,
-             coalesce(collected, 0)::float8 as collected,
-             payment_type
+             (coalesce(payment_type, '') ~* ${INTERNAL_PATTERN}) as internal,
+             sum(coalesce(collected, 0))::float8 as collected,
+             (count(*) filter (where coalesce(collected, 0) <> 0))::int as nonzero
       from sales_dash.collections
-      where sale_date between ${r.from}::date and ${r.to}::date`;
-    out.push(...rows);
-  }
-  return out;
+      where ${where}
+      group by 1, 2, 3, 4, 5`;
+  });
 }
 
 /** Center targets saved for a month ("YYYY-MM-01"), keyed by our CenterId. Missing centers = not saved. */
-export async function fetchTargets(month: string): Promise<Partial<Record<CenterId, number>>> {
+export function fetchTargets(month: string, opts: { fresh?: boolean } = {}): Promise<Partial<Record<CenterId, number>>> {
+  return opts.fresh ? fetchTargetsUncached(month) : cached(`targets:${month}`, () => fetchTargetsUncached(month));
+}
+
+async function fetchTargetsUncached(month: string): Promise<Partial<Record<CenterId, number>>> {
   const rows = await sql()<{ zenoti_name: string; target: number }[]>`
     select c.zenoti_name, t.target::float8 as target
     from sales_dash.targets t join sales_dash.centers c using (center_id)
@@ -87,6 +117,7 @@ export async function submitTargetsOnce(month: string, targets: Record<CenterId,
         await tx`insert into sales_dash.targets (month, center_id, sold_by, target) values (${month}::date, ${centerId}, null, ${value})`;
       }
     });
+    clearCache("targets:");
   } catch (e) {
     if (e instanceof TargetsLockedError) throw e;
     if (e instanceof Error && /duplicate key|unique/i.test(e.message)) throw new TargetsLockedError("Targets for this month were already submitted");
@@ -96,7 +127,6 @@ export async function submitTargetsOnce(month: string, targets: Record<CenterId,
   }
 }
 
-export async function fetchFreshness(): Promise<unknown> {
-  const rows = await sql()`select * from sales_dash.v_freshness`;
-  return rows[0] ?? null;
+export function fetchFreshness(): Promise<unknown> {
+  return cached("freshness", async () => (await sql()`select * from sales_dash.v_freshness`)[0] ?? null);
 }
