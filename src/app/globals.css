@@ -34,8 +34,8 @@ h1 { font-size: 20px; margin: 0; }
 input, select, button, summary { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line);
                                  border-radius: 6px; padding: 6px 8px; }
 .multi { position: relative; } .multiBtn { cursor: pointer; min-width: 140px; text-align: left; }
-.menuActions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; position: sticky; bottom: 0; background: var(--surface); padding-top: 6px; }
-.multi .menu { position: absolute; z-index: 5; background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+.menuActions { display: flex; gap: 6px; justify-content: flex-end; margin: 6px 0 -8px; position: sticky; bottom: -8px; background: var(--surface); padding: 6px 0 8px; }
+.multi .menu { position: absolute; z-index: 40; /* above the pinned status line (30) and table headers */ background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
                padding: 8px; max-height: 320px; overflow: auto; min-width: 240px; box-shadow: 0 6px 20px rgb(0 0 0 / .15); }
 .check { flex-direction: row !important; align-items: center; gap: 6px !important; color: var(--text) !important; padding: 2px 0; }
 .kpis { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
