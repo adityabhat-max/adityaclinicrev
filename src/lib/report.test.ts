@@ -13,12 +13,22 @@ const run = (rows: SaleRow[], compat = SHEET) =>
 const line = (r: ReturnType<typeof run>, id: string) => r.centers.find((c) => c.id === id)!;
 
 describe("dates", () => {
-  it("defaults to 1st→today vs 1st→same day last month", () => {
-    expect(defaultPeriods("2026-11-16")).toEqual({ current: NOV, comparison: OCT });
+  it("defaults to 1st→yesterday vs 1st→same day last month", () => {
+    expect(defaultPeriods("2026-11-17")).toEqual({ current: NOV, comparison: OCT });
+    expect(defaultPeriods("2026-11-18")).toEqual({
+      current: { from: "2026-11-01", to: "2026-11-17" }, comparison: { from: "2026-10-01", to: "2026-10-17" } });
+  });
+  it("on the 1st of a month, opens on the whole previous month", () => {
+    expect(defaultPeriods("2026-12-01")).toEqual({
+      current: { from: "2026-11-01", to: "2026-11-30" }, comparison: { from: "2026-10-01", to: "2026-10-30" } });
+    expect(defaultPeriods("2027-01-01")).toEqual({
+      current: { from: "2026-12-01", to: "2026-12-31" }, comparison: { from: "2026-11-01", to: "2026-11-30" } });
+    expect(defaultPeriods("2026-03-01")).toEqual({
+      current: { from: "2026-02-01", to: "2026-02-28" }, comparison: { from: "2026-01-01", to: "2026-01-28" } });
   });
   it("clamps to the end of a shorter previous month", () => {
-    expect(defaultPeriods("2026-03-31").comparison).toEqual({ from: "2026-02-01", to: "2026-02-28" });
-    expect(defaultPeriods("2026-01-10").comparison).toEqual({ from: "2025-12-01", to: "2025-12-10" });
+    expect(defaultPeriods("2026-04-01").comparison).toEqual({ from: "2026-02-01", to: "2026-02-28" }); // 31 Mar → Feb
+    expect(defaultPeriods("2026-01-11").comparison).toEqual({ from: "2025-12-01", to: "2025-12-10" });
   });
   it("yesterday = today-1, or the range end when the range is in the past", () => {
     expect(yesterdayFor("2026-11-16", "2026-11-16")).toBe("2026-11-15");

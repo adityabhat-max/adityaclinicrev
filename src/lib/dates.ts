@@ -18,13 +18,18 @@ export function addDays(d: ISODate, n: number): ISODate {
   return fmt(t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate());
 }
 
-/** Default: 1st→today of this month vs 1st→same day of last month (clamped to month end). */
+/**
+ * Default when the site opens: 1st of the month → YESTERDAY, vs 1st of the month before → the same day
+ * (clamped to that month's end). On the 1st of a month "yesterday" is the last day of the previous month,
+ * so the site opens on the whole previous month (e.g. 1 Dec → 1–30 Nov vs 1–30 Oct).
+ */
 export function defaultPeriods(today: ISODate = todayIST()): { current: Range; comparison: Range } {
-  const [y, m, d] = parts(today);
+  const end = addDays(today, -1); // yesterday
+  const [y, m, d] = parts(end);
   const py = m === 1 ? y - 1 : y;
   const pm = m === 1 ? 12 : m - 1;
   return {
-    current: { from: fmt(y, m, 1), to: today },
+    current: { from: fmt(y, m, 1), to: end },
     comparison: { from: fmt(py, pm, 1), to: fmt(py, pm, Math.min(d, daysInMonth(py, pm))) },
   };
 }
