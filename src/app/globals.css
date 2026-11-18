@@ -1,12 +1,26 @@
+/* Light by default; dark when the computer is set to dark — unless the viewer picked a theme with the
+   switch (top right), which sets <html data-theme="light|dark">. */
 :root {
   --bg: #f6f7f9; --surface: #ffffff; --text: #1b1f24; --muted: #66707c; --line: #e3e6ea;
   --head: #1f3a5f; --head-text: #ffffff; --pos: #13795b; --neg: #c0392b; --sub: #f1f4f8;
-  color-scheme: light dark; /* scrollbars, date pickers and dropdowns follow the theme */
+  color-scheme: light; /* scrollbars, date pickers and dropdowns follow the theme */
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #111418; --surface: #1a1e24; --text: #e6e9ed; --muted: #9aa4af; --line: #2c323a;
-          --head: #24476f; --head-text: #ffffff; --pos: #3ccf9a; --neg: #ff7b6b; --sub: #20252c; }
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --surface: #1a1e24; --text: #e6e9ed; --muted: #9aa4af; --line: #2c323a;
+    --head: #24476f; --head-text: #ffffff; --pos: #3ccf9a; --neg: #ff7b6b; --sub: #20252c;
+    color-scheme: dark;
+  }
 }
+:root[data-theme="dark"] {
+  --bg: #111418; --surface: #1a1e24; --text: #e6e9ed; --muted: #9aa4af; --line: #2c323a;
+  --head: #24476f; --head-text: #ffffff; --pos: #3ccf9a; --neg: #ff7b6b; --sub: #20252c;
+  color-scheme: dark;
+}
+.themeToggle { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+               cursor: pointer; font-size: 12px; line-height: 1.2; }
+.themeToggle:hover { background: var(--sub); }
+.loginTheme { position: fixed; top: 16px; right: 16px; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width: 1500px; margin: 0 auto; padding: 16px; }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -22,6 +23,7 @@ export default function LoginPage() {
 
   return (
     <main className="loginWrap">
+      <ThemeToggle className="loginTheme" />
       <form className="loginCard" onSubmit={submit}>
         <h1>Sales Performance Dashboard</h1>
         <p className="muted">Sign in to continue</p>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Tabs from "./Tabs";
 import { useStickyTable } from "./useStickyTable";
+import ThemeToggle from "./ThemeToggle";
 import { CENTERS, type CenterId } from "@/lib/centers";
 import { personKey, rosterPeople } from "@/lib/targets";
 import type { Role } from "@/lib/auth";
@@ -126,7 +127,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
     <main>
       <header className="top">
         <h1>Cross-branch 50/50 Splits</h1>
-        <span className="muted topRight"><button type="button" className="link" onClick={logout}>Log out</button></span>
+        <span className="muted topRight"><ThemeToggle /><button type="button" className="link" onClick={logout}>Log out</button></span>
       </header>
 
       <section className="filters">

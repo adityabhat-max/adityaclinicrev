@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Tabs from "./Tabs";
 import { useStickyTable } from "./useStickyTable";
 import YearTargets from "./YearTargets";
+import ThemeToggle from "./ThemeToggle";
 import { CENTERS, type CenterId } from "@/lib/centers";
 import { monthLabel } from "@/lib/dates";
 import { planErrors, type RosterPerson } from "@/lib/targets";
@@ -109,7 +110,7 @@ export default function TargetsEditor({ user, months }: { user: { name: string; 
     <main>
       <header className="top">
         <h1>Monthly Targets</h1>
-        <span className="muted topRight"><button type="button" className="link" onClick={logout}>Log out</button></span>
+        <span className="muted topRight"><ThemeToggle /><button type="button" className="link" onClick={logout}>Log out</button></span>
       </header>
 
       <section className="filters">

@@ -8,6 +8,7 @@ import type { Report } from "@/lib/report";
 import type { Role } from "@/lib/auth";
 import Tabs from "./Tabs";
 import { useStickyTable } from "./useStickyTable";
+import ThemeToggle from "./ThemeToggle";
 
 interface Payload {
   current: Range; comparison: Range; yesterday: string; generatedAt: string; report: Report; error?: string;
@@ -108,6 +109,7 @@ export default function Dashboard({ initial, user }: {
         <h1>Sales Performance Dashboard{curL && ` — ${curL}`}</h1>
         <span className="muted topRight">
           {loading ? "Refreshing…" : data ? `Updated ${new Date(data.generatedAt).toLocaleTimeString("en-IN")}` : ""}
+          <ThemeToggle />
           <button type="button" className="link" onClick={logout}>Log out</button>
         </span>
       </header>
