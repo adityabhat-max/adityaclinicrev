@@ -17,7 +17,8 @@ interface MonthData {
 }
 
 const when = (ts: string) =>
-  new Date(ts.replace(" ", "T")).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
+  // Postgres sends "2026-11-19 10:54:14.469+00"; browsers need "T" and a "+00:00" offset
+  new Date(ts.replace(" ", "T").replace(/([+-]\d\d)$/, "$1:00")).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 
 const inr = (n: number) => `${n < 0 ? "-" : ""}₹${Math.round(Math.abs(n)).toLocaleString("en-US")}`;
 const num = (v: string | undefined) => Number(String(v ?? "").replace(/,/g, ""));

@@ -28,7 +28,8 @@ interface Split {
 
 const inr = (n: number) => `${n < 0 ? "-" : ""}₹${Math.round(Math.abs(n)).toLocaleString("en-US")}`;
 const when = (ts: string) =>
-  new Date(ts.replace(" ", "T")).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
+  // Postgres sends "2026-11-19 10:54:14.469+00"; browsers need "T" and a "+00:00" offset
+  new Date(ts.replace(" ", "T").replace(/([+-]\d\d)$/, "$1:00")).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 const centerName = (zenoti: string) => CENTERS.find((c) => c.zenoti.toLowerCase() === zenoti.toLowerCase())?.name ?? zenoti;
 const clinicName = (id: CenterId | null | undefined) => CENTERS.find((c) => c.id === id)?.name ?? "—";
 const PEOPLE = rosterPeople();
@@ -233,7 +234,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
             <thead>
               <tr>
                 <th className="l">Added on</th><th className="l">Invoice</th><th className="l">Client</th>
-                <th className="l">Seller · keeps half</th><th className="l">Billed at · gets half</th>
+                <th className="l">Seller · keeps half</th><th className="l">Gets half (clinic · person)</th>
                 <th>Amount split</th><th>Half moved</th><th className="l">Added by</th><th className="l">Status</th>
                 {isAdmin && <th></th>}
               </tr>
