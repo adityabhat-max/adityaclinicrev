@@ -46,9 +46,10 @@ export interface ReportInput {
 }
 
 /**
- * One payment line of an invoice that was split 50/50 with the client's home branch.
- * Half of it is taken from where the line is normally credited (its seller, or the invoice branch if the
- * seller isn't on the roster) and given to `to_person` at `to_center`.
+ * One payment line of an invoice that was split 50/50. The client was billed at `to_center`, but the seller
+ * (the client's primary employee) is on another clinic's roster, so the line is credited to the seller's clinic.
+ * Half of it is taken from the seller and given to `to_person` at `to_center` (the billing clinic).
+ * Products, internal lines and lines sold by someone from `to_center` itself are not split.
  */
 export interface SplitLine extends SaleRow {
   split_id: number;
@@ -56,7 +57,7 @@ export interface SplitLine extends SaleRow {
   to_person: string;
 }
 
-/** The share of a split invoice that goes to the home branch. */
+/** The share of a split invoice that goes to the person at the billing clinic. */
 export const SPLIT_SHARE = 0.5;
 
 export interface Figures { current: number; comparison: number | null; yesterday: number; product: number }
@@ -75,6 +76,8 @@ export interface Report { centers: CenterLine[]; total: Omit<CenterLine, "id" | 
 
 const key = (s: string | null | undefined) => (s ?? "").toLowerCase(); // SUMIFS/MATCH are case-insensitive
 const CURRENT_TYPES = new Set(["package", "pre-paid card", "service", "gift card"]);
+/** Item types a cross-branch split applies to (products are never split). */
+export const isSplittableType = (itemType: string | null | undefined) => CURRENT_TYPES.has(key(itemType));
 const PRODUCT = "product";
 const sortAZ = (a: string, b: string) => a.localeCompare(b, "en", { sensitivity: "base" });
 
@@ -183,31 +186,25 @@ export function buildReport(input: ReportInput): Report {
   for (const s of input.splits ?? []) {
     if (s.internal ?? isInternalAdjustment(s.payment_type)) continue;
     const type = key(s.item_type);
-    const isProduct = type === PRODUCT;
-    if (!isProduct && !CURRENT_TYPES.has(type)) continue;
+    if (!CURRENT_TYPES.has(type)) continue; // products are never split
     const seller = key(s.sold_by);
-    const sellerOnRoster = ownerCenter.has(seller);
-    // a blank-seller line was never counted (sheet rule), so there is nothing to move
-    if (!isProduct && !sellerOnRoster && seller.trim() === "" && compat.blankSellerDropped) continue;
+    const sellerHome = ownerCenter.get(seller);
+    // only lines sold by a rostered person from ANOTHER clinic than the billing clinic are split
+    if (!sellerHome || sellerHome === s.to_center) continue;
     const half = (Number(s.collected) || 0) * SPLIT_SHARE;
     if (!half) continue;
-    const d = z();
-    if (isProduct) { if (inRange(s.sale_date, input.current)) d.product = half; }
-    else {
-      if (inRange(s.sale_date, input.current)) d.current = half;
-      if (inRange(s.sale_date, input.comparison)) d.comparison = half;
-      if (s.sale_date === input.yesterday) d.yesterday = half;
-    }
-    if (!d.current && !d.comparison && !d.yesterday && !d.product) continue;
-
-    // take half from where the line is credited …
-    if (sellerOnRoster) addTo(ownerDelta.get(seller) ?? ownerDelta.set(seller, z()).get(seller)!, d, -1);
-    else {
-      const from = CENTERS.find((c) => key(c.zenoti) === key(s.center_name));
-      if (from) addTo(split.get(from.id)!, d, -1);
-    }
-    // … and give it to the chosen person at the home branch
     const to = key(s.to_person);
+    const d = z();
+    if (inRange(s.sale_date, input.current)) d.current = half;
+    // comparison follows the same rules as the people's own comparison figures
+    if (inRange(s.sale_date, input.comparison) && cmpOwnerTypes.has(type) && !excludedCmp.has(seller) && !excludedCmp.has(to))
+      d.comparison = half;
+    if (s.sale_date === input.yesterday) d.yesterday = half;
+    if (!d.current && !d.comparison && !d.yesterday) continue;
+
+    // take half from the seller (credited at their own clinic) …
+    addTo(ownerDelta.get(seller) ?? ownerDelta.set(seller, z()).get(seller)!, d, -1);
+    // … and give it to the chosen person at the clinic that billed the invoice
     if (ownerCenter.get(to) === s.to_center) addTo(ownerDelta.get(to) ?? ownerDelta.set(to, z()).get(to)!, d, 1);
     else addTo(split.get(s.to_center)!, d, 1);
   }

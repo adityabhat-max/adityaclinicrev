@@ -5,8 +5,8 @@ import {
 } from "@/lib/db";
 import { CENTERS, type CenterId } from "@/lib/centers";
 import { splitWindowStart } from "@/lib/dates";
-import { rosterPeople } from "@/lib/targets";
-import { SPLIT_SHARE } from "@/lib/report";
+import { personKey, rosterPeople } from "@/lib/targets";
+import { isSplittableType, SPLIT_SHARE } from "@/lib/report";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,27 +14,49 @@ export const dynamic = "force-dynamic";
 const NOT_SET_UP = "Splits are not set up in the database yet (sales_dash.invoice_splits). Run the setup SQL from the README.";
 const zen = (name: string) => CENTERS.find((c) => c.zenoti.toLowerCase() === name.toLowerCase());
 
-/** What a split of this invoice would look like — or why it can't be split. */
+/** A person's own clinic from the roster (null = not on the roster). */
+const homeOf = (seller: string | null) => {
+  const k = personKey(seller ?? "");
+  return k ? rosterPeople().find((p) => personKey(p.name) === k)?.center ?? null : null;
+};
+
+/**
+ * What a split of this invoice would look like — or why it can't be split.
+ * Split = the lines (packages, services, pre-paid cards, gift cards — not products) sold by a person from ANOTHER
+ * clinic than the one that billed the invoice. Half stays with that seller, half goes to a person at the billing clinic.
+ */
 async function inspect(invoiceNo: string) {
   const lines = await lookupInvoice(invoiceNo);
   if (!lines.length) return { error: `Invoice ${invoiceNo} was not found in the Zenoti data.` };
-  const counted = lines.filter((l) => !l.internal);
-  const total = counted.reduce((s, l) => s + l.collected, 0);
   const centers = [...new Set(lines.map((l) => l.center_name))];
   const center = zen(centers[0]);
   const first = lines.map((l) => l.sale_date).sort()[0];
-  const sellers = [...new Set(counted.map((l) => l.sold_by?.trim()).filter(Boolean))] as string[];
+  const splitLine = (l: InvoiceLine) => {
+    const h = homeOf(l.sold_by);
+    return !l.internal && isSplittableType(l.item_type) && !!h && h !== center?.id;
+  };
+  const splitLines = lines.filter(splitLine);
+  const total = splitLines.reduce((s, l) => s + l.collected, 0);
+  const sellers = [...new Set(splitLines.map((l) => l.sold_by!.trim()))];
   const info = {
     invoiceNo: invoiceNo.toUpperCase(), centerName: centers[0], centerId: center?.id ?? null,
-    client: lines.find((l) => l.guest_name)?.guest_name ?? null, sellers, total, half: total * SPLIT_SHARE,
-    firstPayment: first, lines: lines as InvoiceLine[],
+    client: lines.find((l) => l.guest_name)?.guest_name ?? null,
+    sellers: sellers.map((n) => ({ name: n, center: homeOf(n)! })),
+    total, half: total * SPLIT_SHARE, firstPayment: first,
+    lines: lines.map((l) => ({ ...l, split: splitLine(l) })),
   };
+  const ownSellers = [...new Set(lines.filter((l) => !l.internal && isSplittableType(l.item_type) && l.sold_by?.trim())
+    .map((l) => l.sold_by!.trim()))];
   const windowStart = splitWindowStart();
   let problem: string | null = null;
   if (centers.length > 1) problem = "This invoice has payments at more than one branch, so it can't be split here.";
   else if (!center) problem = `The invoice branch (${centers[0]}) is not one of the dashboard's centers.`;
   else if (first < windowStart) problem = `This invoice was paid on ${first}. Only invoices paid on or after ${windowStart} (this month or last month) can be split.`;
-  else if (!counted.length || total === 0) problem = "This invoice has no amount to split.";
+  else if (!splitLines.length) problem = ownSellers.length
+    ? `Not a cross-branch invoice — the seller (${ownSellers.join(", ")}) is not from another clinic's sales team, so there is nothing to split.`
+    : "This invoice has no package, service, pre-paid card or gift card sold by a person from another clinic (products are not split).";
+  else if (sellers.length > 1) problem = `This invoice has more than one seller from other clinics (${sellers.join(", ")}), so it can't be split here.`;
+  else if (total === 0) problem = "This invoice has no amount to split.";
   else {
     const existing = await activeSplitFor(info.invoiceNo).catch(() => null);
     if (existing) problem = `This invoice is already split with ${existing.to_person} (${existing.to_center_name}), added by ${existing.created_by}.`;
@@ -58,7 +80,7 @@ export async function GET(req: NextRequest) {
 /**
  * POST (admin only)
  *   { action: "lookup", invoiceNo }
- *   { action: "add", invoiceNo, toCenter, toPerson, note? }
+ *   { action: "add", invoiceNo, toPerson, note? }   (toPerson = a person at the billing clinic)
  *   { action: "cancel", id, reason }
  */
 export async function POST(req: NextRequest) {
@@ -77,17 +99,16 @@ export async function POST(req: NextRequest) {
       if (action === "lookup") return NextResponse.json({ info, problem });
       if (problem) return NextResponse.json({ error: problem }, { status: 400 });
 
-      const toCenter = String(body?.toCenter ?? "") as CenterId;
+      // the other half always goes to a person at the clinic that billed the invoice
+      const toCenter = info!.centerId as CenterId;
       const toPerson = String(body?.toPerson ?? "");
-      if (!CENTERS.some((c) => c.id === toCenter)) return NextResponse.json({ error: "Choose the client's home branch" }, { status: 400 });
-      if (toCenter === info!.centerId) return NextResponse.json({ error: "The home branch must be different from the invoice's branch" }, { status: 400 });
       if (!rosterPeople().some((p) => p.center === toCenter && p.name === toPerson))
-        return NextResponse.json({ error: "Choose a person from the home branch" }, { status: 400 });
+        return NextResponse.json({ error: "Choose a sales person from the clinic that billed the invoice" }, { status: 400 });
       const note = String(body?.note ?? "").trim().slice(0, 300) || null;
 
       await addSplit({
         invoice_no: info!.invoiceNo, client_name: info!.client, from_center: info!.centerName,
-        from_seller: info!.sellers.join(", ") || null, to_center: toCenter, to_person: toPerson,
+        from_seller: info!.sellers.map((x) => x.name).join(", ") || null, to_center: toCenter, to_person: toPerson,
         invoice_total: info!.total, note,
       }, s.email);
       return NextResponse.json({ ok: true });

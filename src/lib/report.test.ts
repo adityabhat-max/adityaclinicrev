@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildReport, type SaleRow, type SplitLine } from "./report";
 import { FIXED, SHEET } from "./compat";
+import type { CenterId } from "./centers";
 import { defaultPeriods, yesterdayFor, mergeRanges, editableMonths } from "./dates";
 
 const NOV = { from: "2026-11-01", to: "2026-11-16" };
@@ -150,22 +151,30 @@ describe("filters", () => {
 });
 
 describe("cross-branch 50/50 splits", () => {
-  // Invoice at Vasant Vihar sold by a VV person; the client's home branch is Khan Market.
-  const sale = row({ sold_by: "Vanita Pasbola - (VV)", center_name: "Vasant Vihar, New Delhi", collected: 100_000 });
+  // A Khan Market client billed at Vasant Vihar; the seller is their primary employee from Khan Market,
+  // so without a split the whole invoice is credited to Khan Market. Half goes to a VV person.
+  const sale = row({ sold_by: "Meena Sharma - (KM)", center_name: "Vasant Vihar, New Delhi", collected: 100_000 });
   const split = (p: Partial<SplitLine> = {}): SplitLine =>
-    ({ ...sale, split_id: 1, to_center: "KM", to_person: "Meena Sharma - (KM)", ...p });
+    ({ ...sale, split_id: 1, to_center: "VV", to_person: "Vanita Pasbola - (VV)", ...p });
   const runS = (rows: SaleRow[], splits: SplitLine[], extra = {}) =>
     buildReport({ rows, current: NOV, comparison: OCT, yesterday: Y, compat: SHEET, splits, ...extra });
+  const person = (r: ReturnType<typeof runS>, c: CenterId, p: string) => line(r, c).owners.find((o) => o.name.startsWith(p))!;
 
   it("changes nothing when there are no splits", () => {
     expect(JSON.stringify(runS([sale], []))).toBe(JSON.stringify(run([sale])));
   });
-  it("moves exactly half from the seller to the home-branch person; grand total unchanged", () => {
+  it("without a split the invoice is credited to the seller's own clinic", () => {
+    const r = runS([sale], []);
+    expect(line(r, "KM").current).toBe(100_000);
+    expect(line(r, "VV").current).toBe(0);
+  });
+  it("moves exactly half from the seller to the person at the billing clinic; grand total unchanged", () => {
     const r = runS([sale], [split()]);
-    expect(line(r, "VV").current).toBe(50_000);
     expect(line(r, "KM").current).toBe(50_000);
-    expect(line(r, "VV").owners.find((o) => o.name.startsWith("Vanita"))!.current).toBe(50_000);
-    expect(line(r, "KM").owners.find((o) => o.name.startsWith("Meena"))!.current).toBe(50_000);
+    expect(line(r, "VV").current).toBe(50_000);
+    expect(person(r, "KM", "Meena").current).toBe(50_000);
+    expect(person(r, "VV", "Vanita").current).toBe(50_000);
+    expect(line(r, "VV").yesterday).toBe(0);
     expect(r.total.current).toBe(run([sale]).total.current);
   });
   it("splits each payment on its own date (a last-month part payment lands in comparison)", () => {
@@ -173,21 +182,37 @@ describe("cross-branch 50/50 splits", () => {
     const r = runS([sale, old], [split(), split({ sale_date: "2026-10-05", collected: 40_000 })]);
     expect(line(r, "KM").comparison).toBe(20_000);
     expect(line(r, "VV").comparison).toBe(20_000);
+    expect(r.total.comparison).toBe(runS([sale, old], []).total.comparison);
   });
-  it("splits products too", () => {
+  it("splits yesterday's payments in the yesterday column", () => {
+    const y = { ...sale, sale_date: Y };
+    const r = runS([y], [split({ sale_date: Y })]);
+    expect(line(r, "KM").yesterday).toBe(50_000);
+    expect(line(r, "VV").yesterday).toBe(50_000);
+  });
+  it("never splits products", () => {
     const p = { ...sale, item_type: "Product", collected: 2_000 };
-    const r = runS([p], [split({ item_type: "Product", collected: 2_000 })]);
-    expect(line(r, "KM").product).toBe(1_000);
-    expect(line(r, "VV").product).toBe(1_000);
+    const r = runS([sale, p], [split(), split({ item_type: "Product", collected: 2_000 })]);
+    const before = runS([sale, p], []);
+    for (const c of ["KM", "VV"] as CenterId[]) expect(line(r, c).product).toBe(line(before, c).product);
+    expect(person(r, "KM", "Meena").product).toBe(person(before, "KM", "Meena").product);
+  });
+  it("does not split lines sold by someone from the billing clinic itself", () => {
+    const own = row({ sold_by: "Shivani Bhandari - (VV)", center_name: "Vasant Vihar, New Delhi", collected: 30_000 });
+    const r = runS([own], [split({ sold_by: "Shivani Bhandari - (VV)", collected: 30_000 })]);
+    expect(JSON.stringify(r)).toBe(JSON.stringify(runS([own], [])));
+  });
+  it("does not split lines whose seller isn't on the roster", () => {
+    const walkIn = row({ sold_by: "Someone New", center_name: "Vasant Vihar, New Delhi", collected: 10_000 });
+    const r = runS([walkIn], [split({ sold_by: "Someone New", collected: 10_000 })]);
+    expect(JSON.stringify(r)).toBe(JSON.stringify(runS([walkIn], [])));
   });
   it("ignores internal refund/transfer lines", () => {
     const r = runS([sale], [split({ payment_type: "Custom - Refund - Internal", collected: -50_000 })]);
     expect(JSON.stringify(r)).toBe(JSON.stringify(runS([sale], [])));
   });
-  it("takes the half off the branch when the seller isn't on the roster", () => {
-    const walkIn = row({ sold_by: "Someone New", center_name: "Vasant Vihar, New Delhi", collected: 10_000 });
-    const r = runS([walkIn], [split({ sold_by: "Someone New", collected: 10_000 })]);
-    expect(line(r, "VV").splitAdjustment.current).toBe(-5_000);
-    expect(line(r, "KM").current).toBe(5_000);
+  it("with a sales-owner filter, each person sees only their own half", () => {
+    expect(line(runS([sale], [split()], { owners: ["Vanita Pasbola - (VV)"] }), "VV").current).toBe(50_000);
+    expect(line(runS([sale], [split()], { owners: ["Meena Sharma - (KM)"] }), "KM").current).toBe(50_000);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Tabs from "./Tabs";
 import { useStickyTable } from "./useStickyTable";
 import ThemeToggle from "./ThemeToggle";
@@ -11,9 +11,13 @@ import type { Role } from "@/lib/auth";
 interface Line {
   sale_date: string; item_type: string; item_name: string | null; center_name: string; sold_by: string | null;
   guest_name: string | null; payment_type: string | null; collected: number; internal: boolean;
+  /** true = this line is split (sold by a person from another clinic; not a product) */
+  split: boolean;
 }
 interface Info {
-  invoiceNo: string; centerName: string; centerId: CenterId | null; client: string | null; sellers: string[];
+  invoiceNo: string; centerName: string; centerId: CenterId | null; client: string | null;
+  /** the seller from another clinic (the client's primary employee), with their own clinic */
+  sellers: { name: string; center: CenterId }[];
   total: number; half: number; firstPayment: string; lines: Line[];
 }
 interface Split {
@@ -26,8 +30,14 @@ const inr = (n: number) => `${n < 0 ? "-" : ""}₹${Math.round(Math.abs(n)).toLo
 const when = (ts: string) =>
   new Date(ts.replace(" ", "T")).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 const centerName = (zenoti: string) => CENTERS.find((c) => c.zenoti.toLowerCase() === zenoti.toLowerCase())?.name ?? zenoti;
+const clinicName = (id: CenterId | null | undefined) => CENTERS.find((c) => c.id === id)?.name ?? "—";
 const PEOPLE = rosterPeople();
 const ON_ROSTER = new Map(PEOPLE.map((p) => [personKey(p.name), p.center]));
+/** "Name (Clinic)" using the person's clinic on the roster. */
+const withClinic = (name: string) => {
+  const c = ON_ROSTER.get(personKey(name.trim()));
+  return c ? `${name.trim()} (${clinicName(c)})` : name.trim();
+};
 
 export default function SplitsPage({ user }: { user: { name: string; role: Role } }) {
   const isAdmin = user.role === "admin";
@@ -39,7 +49,6 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
   const [invoice, setInvoice] = useState("");
   const [info, setInfo] = useState<Info | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const [toCenter, setToCenter] = useState<CenterId | "">("");
   const [toPerson, setToPerson] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -64,7 +73,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
     return { ok: res.ok, j: await res.json().catch(() => ({})) };
   };
 
-  const resetForm = () => { setInfo(null); setProblem(null); setToCenter(""); setToPerson(""); setNote(""); };
+  const resetForm = () => { setInfo(null); setProblem(null); setToPerson(""); setNote(""); };
 
   async function lookup() {
     setError(""); setDone(""); resetForm();
@@ -77,40 +86,30 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
     setInfo(r.j.info); setProblem(r.j.problem);
   }
 
-  // What leaves the invoice branch: half of each seller's lines (non-rostered sellers come off the branch).
-  const fromSide = useMemo(() => {
-    if (!info) return [];
-    const by = new Map<string, number>();
-    for (const l of info.lines) {
-      if (l.internal) continue;
-      const seller = l.sold_by?.trim() || "";
-      const label = ON_ROSTER.has(personKey(seller)) ? seller : `${centerName(info.centerName)} (branch)`;
-      by.set(label, (by.get(label) ?? 0) + l.collected / 2);
-    }
-    return [...by.entries()].filter(([, v]) => v !== 0);
-  }, [info]);
-
-  const homePeople = PEOPLE.filter((p) => p.center === toCenter);
-  const toName = CENTERS.find((c) => c.id === toCenter)?.name;
+  // Half stays with the seller (their own clinic); half goes to a person at the clinic that billed the invoice.
+  const billedAt = info?.centerId ?? null;
+  const billedPeople = PEOPLE.filter((p) => p.center === billedAt);
+  const seller = info?.sellers[0];
 
   async function save() {
-    if (!info || !toCenter || !toPerson) return;
+    if (!info || !seller || !toPerson) return;
     const ok = window.confirm(
       `Split invoice ${info.invoiceNo} 50/50?\n\n`
-      + `${centerName(info.centerName)} keeps ${inr(info.half)}\n${toName}: ${toPerson} gets ${inr(info.half)}\n\n`
+      + `${seller.name} (${clinicName(seller.center)}) keeps ${inr(info.half)}\n`
+      + `${toPerson} (${clinicName(billedAt)}) gets ${inr(info.half)}\n\n`
       + "This is recorded in the split log with your name and the time.");
     if (!ok) return;
     setBusy(true); setError("");
-    const r = await post({ action: "add", invoiceNo: info.invoiceNo, toCenter, toPerson, note });
+    const r = await post({ action: "add", invoiceNo: info.invoiceNo, toPerson, note });
     setBusy(false);
     if (!r) return;
     if (!r.ok) { setError(r.j.error ?? "Could not save the split"); return; }
-    setDone(`Invoice ${info.invoiceNo} split: ${inr(info.half)} moved to ${toPerson} (${toName}). The dashboard updates within a minute.`);
+    setDone(`Invoice ${info.invoiceNo} split: ${inr(info.half)} moved from ${seller.name} to ${toPerson} (${clinicName(billedAt)}). Reload the dashboard to see it.`);
     setInvoice(""); resetForm(); loadLog();
   }
 
   async function cancel(s: Split) {
-    const reason = window.prompt(`Cancel the split of invoice ${s.invoice_no}?\n\nThe full amount goes back to ${centerName(s.from_center)}. Enter a reason:`);
+    const reason = window.prompt(`Cancel the split of invoice ${s.invoice_no}?\n\nThe full amount goes back to ${s.from_seller ?? "the seller"}. Enter a reason:`);
     if (reason === null) return;
     if (!reason.trim()) { setError("A reason is needed to cancel a split"); return; }
     setError(""); setDone("");
@@ -131,7 +130,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
       </header>
 
       <section className="filters">
-        <div className="monthTag">When a client registered at one branch buys at another, the invoice is shared 50/50.</div>
+        <div className="monthTag">When a client is billed at another clinic, their primary employee (the seller) and a sales person at that clinic share the invoice 50/50.</div>
         <Tabs active="splits" role={user.role} />
       </section>
 
@@ -147,7 +146,8 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
       {isAdmin && setup && (
         <section className="card splitForm">
           <h2>Add a split</h2>
-          <p className="muted">Enter the invoice raised at the branch the client visited. Invoices paid on or after {windowStart || "the 1st of last month"} (this month or last month) can be split.</p>
+          <p className="muted">Enter the invoice raised at the clinic the client visited. Packages, services, pre-paid cards and gift cards
+            sold by a person from another clinic are split; products are not. Invoices paid on or after {windowStart || "the 1st of last month"} (this month or last month) can be split.</p>
           <div className="row">
             <input value={invoice} onChange={(e) => setInvoice(e.target.value.toUpperCase())} placeholder="Invoice no. e.g. VVR94453"
               onKeyDown={(e) => { if (e.key === "Enter") lookup(); }} aria-label="Invoice number" />
@@ -158,21 +158,25 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
             <div className="invoiceCard">
               <div className="facts">
                 <div><span className="muted">Invoice</span><b>{info.invoiceNo}</b></div>
-                <div><span className="muted">Branch</span><b>{centerName(info.centerName)}</b></div>
+                <div><span className="muted">Billed at</span><b>{centerName(info.centerName)}</b></div>
                 <div><span className="muted">Client</span><b>{info.client ?? "—"}</b></div>
-                <div><span className="muted">Seller(s)</span><b>{info.sellers.join(", ") || "—"}</b></div>
-                <div><span className="muted">Total paid</span><b>{inr(info.total)}</b></div>
+                <div><span className="muted">Seller (primary employee)</span><b>{seller ? `${seller.name} · ${clinicName(seller.center)}` : "—"}</b></div>
+                <div><span className="muted">Amount to split</span><b>{inr(info.total)}</b></div>
               </div>
               <div className="tableWrap">
                 <table>
-                  <thead><tr><th className="l">Paid on</th><th className="l">Item</th><th className="l">Type</th><th className="l">Seller</th><th className="l">Payment</th><th>Amount</th></tr></thead>
+                  <thead><tr><th className="l">Paid on</th><th className="l">Item</th><th className="l">Type</th><th className="l">Seller</th><th className="l">Payment</th><th>Amount</th><th className="l">Split?</th></tr></thead>
                   <tbody>
                     {info.lines.map((l, i) => (
-                      <tr key={i} className={l.internal ? "sub" : ""}>
+                      <tr key={i} className={l.split ? "" : "sub"}>
                         <td className="l">{l.sale_date}</td><td className="l">{l.item_name ?? "—"}</td><td className="l">{l.item_type}</td>
-                        <td className="l">{l.sold_by ?? "—"}</td>
+                        <td className="l">{l.sold_by ? withClinic(l.sold_by) : "—"}</td>
                         <td className="l">{l.payment_type ?? "—"}{l.internal ? " (internal — not counted)" : ""}</td>
                         <td>{inr(l.collected)}</td>
+                        <td className="l">{l.split ? <span className="pos">Yes</span>
+                          : l.internal ? "No"
+                          : l.item_type.toLowerCase() === "product" ? "No (product)"
+                          : "No (seller not from another clinic)"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -182,34 +186,27 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
               {problem ? <p className="error">{problem}</p> : (
                 <>
                   <div className="row">
-                    <label>Client&apos;s home branch
-                      <select value={toCenter} onChange={(e) => { setToCenter(e.target.value as CenterId); setToPerson(""); }}>
+                    <label>Sales person at {clinicName(billedAt)} (gets half)
+                      <select value={toPerson} onChange={(e) => setToPerson(e.target.value)}>
                         <option value="">Choose…</option>
-                        {CENTERS.filter((c) => c.id !== info.centerId).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                      </select>
-                    </label>
-                    <label>Person who brought the client
-                      <select value={toPerson} onChange={(e) => setToPerson(e.target.value)} disabled={!toCenter}>
-                        <option value="">Choose…</option>
-                        {homePeople.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+                        {billedPeople.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
                       </select>
                     </label>
                     <label className="grow">Note (optional)
-                      <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} placeholder="e.g. referred by Khan Market" />
+                      <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} placeholder="e.g. Karkardooma client visiting" />
                     </label>
                   </div>
 
-                  {toCenter && toPerson && (
+                  {seller && toPerson && (
                     <div className="preview">
-                      <div><b>{centerName(info.centerName)}</b> keeps {inr(info.half)}
-                        {fromSide.map(([who, v]) => <span key={who} className="neg"> · {who} {inr(-v)}</span>)}</div>
-                      <div><b>{toName}</b> gets {inr(info.half)} <span className="pos">· {toPerson} +{inr(info.half)}</span></div>
+                      <div><b>{clinicName(seller.center)}</b> · {seller.name} keeps {inr(info.half)} <span className="neg">({inr(-info.half)})</span></div>
+                      <div><b>{clinicName(billedAt)}</b> · {toPerson} gets {inr(info.half)} <span className="pos">(+{inr(info.half)})</span></div>
                       <div className="muted">Each payment is split on its own payment date (part payments included).</div>
                     </div>
                   )}
 
                   <div className="row">
-                    <button type="button" className="primary" onClick={save} disabled={busy || !toCenter || !toPerson}>
+                    <button type="button" className="primary" onClick={save} disabled={busy || !seller || !toPerson}>
                       {busy ? "Saving…" : "Confirm 50/50 split"}
                     </button>
                     <button type="button" onClick={() => { setInvoice(""); resetForm(); }}>Clear</button>
@@ -229,8 +226,8 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
             <thead>
               <tr>
                 <th className="l">Added on</th><th className="l">Invoice</th><th className="l">Client</th>
-                <th className="l">From (branch · seller)</th><th className="l">To (branch · person)</th>
-                <th>Invoice total</th><th>Half moved</th><th className="l">Added by</th><th className="l">Status</th>
+                <th className="l">Seller · keeps half</th><th className="l">Billed at · gets half</th>
+                <th>Amount split</th><th>Half moved</th><th className="l">Added by</th><th className="l">Status</th>
                 {isAdmin && <th></th>}
               </tr>
             </thead>
@@ -240,7 +237,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
                   <td className="l">{when(s.created_at)}</td>
                   <td className="l"><b>{s.invoice_no}</b>{s.note && <div className="muted wrap">{s.note}</div>}</td>
                   <td className="l">{s.client_name ?? "—"}</td>
-                  <td className="l">{centerName(s.from_center)}<div className="muted">{s.from_seller ?? "—"}</div></td>
+                  <td className="l">{s.from_seller ? withClinic(s.from_seller) : "—"}</td>
                   <td className="l">{centerName(s.to_center_name)}<div className="muted">{s.to_person}</div></td>
                   <td>{inr(s.invoice_total)}</td><td>{inr(s.invoice_total / 2)}</td>
                   <td className="l">{s.created_by}</td>
