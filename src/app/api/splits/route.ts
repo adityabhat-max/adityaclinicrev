@@ -22,8 +22,8 @@ const homeOf = (seller: string | null) => {
 
 /**
  * What a split of this invoice would look like — or why it can't be split.
- * Split = the lines (packages, services, pre-paid cards, gift cards — not products) sold by a person from ANOTHER
- * clinic than the one that billed the invoice. Half stays with that seller, half goes to a person at the billing clinic.
+ * Split = the lines (packages, services, pre-paid cards, gift cards — not products) sold by a person on the sales
+ * team (any clinic, including the billing clinic). Half stays with that seller, half goes to the person picked.
  */
 async function inspect(invoiceNo: string) {
   const lines = await lookupInvoice(invoiceNo);
@@ -31,10 +31,7 @@ async function inspect(invoiceNo: string) {
   const centers = [...new Set(lines.map((l) => l.center_name))];
   const center = zen(centers[0]);
   const first = lines.map((l) => l.sale_date).sort()[0];
-  const splitLine = (l: InvoiceLine) => {
-    const h = homeOf(l.sold_by);
-    return !l.internal && isSplittableType(l.item_type) && !!h && h !== center?.id;
-  };
+  const splitLine = (l: InvoiceLine) => !l.internal && isSplittableType(l.item_type) && !!homeOf(l.sold_by);
   const splitLines = lines.filter(splitLine);
   const total = splitLines.reduce((s, l) => s + l.collected, 0);
   const sellers = [...new Set(splitLines.map((l) => l.sold_by!.trim()))];
@@ -53,9 +50,9 @@ async function inspect(invoiceNo: string) {
   else if (!center) problem = `The invoice branch (${centers[0]}) is not one of the dashboard's centers.`;
   else if (first < windowStart) problem = `This invoice was paid on ${first}. Only invoices paid on or after ${windowStart} (this month or last month) can be split.`;
   else if (!splitLines.length) problem = ownSellers.length
-    ? `Not a cross-branch invoice — the seller (${ownSellers.join(", ")}) is not from another clinic's sales team, so there is nothing to split.`
-    : "This invoice has no package, service, pre-paid card or gift card sold by a person from another clinic (products are not split).";
-  else if (sellers.length > 1) problem = `This invoice has more than one seller from other clinics (${sellers.join(", ")}), so it can't be split here.`;
+    ? `The seller (${ownSellers.join(", ")}) is not on any clinic's sales team, so there is nothing to split.`
+    : "This invoice has no package, service, pre-paid card or gift card with a seller (products are not split).";
+  else if (sellers.length > 1) problem = `This invoice has more than one seller (${sellers.join(", ")}), so it can't be split here.`;
   else if (total === 0) problem = "This invoice has no amount to split.";
   else {
     const existing = await activeSplitFor(info.invoiceNo).catch(() => null);
@@ -80,7 +77,7 @@ export async function GET(req: NextRequest) {
 /**
  * POST (admin only)
  *   { action: "lookup", invoiceNo }
- *   { action: "add", invoiceNo, toPerson, note? }   (toPerson = a person at the billing clinic)
+ *   { action: "add", invoiceNo, toCenter, toPerson, note? }   (toCenter defaults to the billing clinic)
  *   { action: "cancel", id, reason }
  */
 export async function POST(req: NextRequest) {
@@ -99,11 +96,14 @@ export async function POST(req: NextRequest) {
       if (action === "lookup") return NextResponse.json({ info, problem });
       if (problem) return NextResponse.json({ error: problem }, { status: 400 });
 
-      // the other half always goes to a person at the clinic that billed the invoice
-      const toCenter = info!.centerId as CenterId;
+      // the other half goes to the person picked — any clinic (the page starts on the billing clinic), not the seller
+      const toCenter = String(body?.toCenter ?? info!.centerId ?? "") as CenterId;
       const toPerson = String(body?.toPerson ?? "");
+      if (!CENTERS.some((c) => c.id === toCenter)) return NextResponse.json({ error: "Choose a clinic" }, { status: 400 });
       if (!rosterPeople().some((p) => p.center === toCenter && p.name === toPerson))
-        return NextResponse.json({ error: "Choose a sales person from the clinic that billed the invoice" }, { status: 400 });
+        return NextResponse.json({ error: "Choose a sales person from that clinic" }, { status: 400 });
+      if (personKey(toPerson) === personKey(info!.sellers[0].name))
+        return NextResponse.json({ error: "The other half must go to someone other than the seller" }, { status: 400 });
       const note = String(body?.note ?? "").trim().slice(0, 300) || null;
 
       await addSplit({

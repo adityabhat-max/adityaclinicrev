@@ -213,8 +213,8 @@ export function fetchSplitLines(ranges: Range[]): Promise<SplitLine[]> {
         const where = merged
           .map((r) => db`(c.sale_date between ${r.from}::date and ${r.to}::date)`)
           .reduce((acc, f) => db`${acc} or ${f}`);
-        return db<(SaleRow & { split_id: number; to_center_name: string; to_person: string })[]>`
-          select s.id::int as split_id, ce.zenoti_name as to_center_name, s.to_person,
+        return db<(SaleRow & { split_id: number; to_center_name: string; to_person: string; from_seller: string | null })[]>`
+          select s.id::int as split_id, ce.zenoti_name as to_center_name, s.to_person, s.from_seller,
                  c.sale_date::text as sale_date, c.item_type, c.center_name, c.sold_by,
                  (coalesce(c.payment_type, '') ~* ${INTERNAL_PATTERN}) as internal,
                  sum(coalesce(c.collected, 0))::float8 as collected
@@ -222,7 +222,7 @@ export function fetchSplitLines(ranges: Range[]): Promise<SplitLine[]> {
           join sales_dash.centers ce on ce.center_id = s.to_center_id
           join sales_dash.collections c on c.invoice_no = s.invoice_no
           where s.cancelled_at is null and (${where})
-          group by 1, 2, 3, 4, 5, 6, 7, 8`;
+          group by 1, 2, 3, 4, 5, 6, 7, 8, 9`;
       });
       return rows.flatMap((r) => {
         const to = centerIdByZenoti(r.to_center_name);

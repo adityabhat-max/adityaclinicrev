@@ -46,15 +46,17 @@ export interface ReportInput {
 }
 
 /**
- * One payment line of an invoice that was split 50/50. The client was billed at `to_center`, but the seller
- * (the client's primary employee) is on another clinic's roster, so the line is credited to the seller's clinic.
- * Half of it is taken from the seller and given to `to_person` at `to_center` (the billing clinic).
- * Products, internal lines and lines sold by someone from `to_center` itself are not split.
+ * One payment line of an invoice that was split 50/50. The line is credited to its seller (at the seller's own
+ * clinic, as always); half of it is taken from the seller and given to `to_person` at `to_center`.
+ * Only lines sold by the split's seller (`from_seller`) are split — never products, internal lines,
+ * sellers who aren't on the roster, or a split to the seller themself.
  */
 export interface SplitLine extends SaleRow {
   split_id: number;
   to_center: CenterId;
   to_person: string;
+  /** The seller whose lines are split (recorded with the split). */
+  from_seller: string | null;
 }
 
 /** The share of a split invoice that goes to the person at the billing clinic. */
@@ -188,12 +190,11 @@ export function buildReport(input: ReportInput): Report {
     const type = key(s.item_type);
     if (!CURRENT_TYPES.has(type)) continue; // products are never split
     const seller = key(s.sold_by);
-    const sellerHome = ownerCenter.get(seller);
-    // only lines sold by a rostered person from ANOTHER clinic than the billing clinic are split
-    if (!sellerHome || sellerHome === s.to_center) continue;
+    const to = key(s.to_person);
+    // only lines sold by the split's (rostered) seller are split, and never to that same person
+    if (!ownerCenter.has(seller) || seller.trim() !== key(s.from_seller).trim() || seller === to) continue;
     const half = (Number(s.collected) || 0) * SPLIT_SHARE;
     if (!half) continue;
-    const to = key(s.to_person);
     const d = z();
     if (inRange(s.sale_date, input.current)) d.current = half;
     // comparison follows the same rules as the people's own comparison figures

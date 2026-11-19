@@ -155,7 +155,7 @@ describe("cross-branch 50/50 splits", () => {
   // so without a split the whole invoice is credited to Khan Market. Half goes to a VV person.
   const sale = row({ sold_by: "Meena Sharma - (KM)", center_name: "Vasant Vihar, New Delhi", collected: 100_000 });
   const split = (p: Partial<SplitLine> = {}): SplitLine =>
-    ({ ...sale, split_id: 1, to_center: "VV", to_person: "Vanita Pasbola - (VV)", ...p });
+    ({ ...sale, split_id: 1, to_center: "VV", to_person: "Vanita Pasbola - (VV)", from_seller: p.sold_by ?? sale.sold_by, ...p });
   const runS = (rows: SaleRow[], splits: SplitLine[], extra = {}) =>
     buildReport({ rows, current: NOV, comparison: OCT, yesterday: Y, compat: SHEET, splits, ...extra });
   const person = (r: ReturnType<typeof runS>, c: CenterId, p: string) => line(r, c).owners.find((o) => o.name.startsWith(p))!;
@@ -197,10 +197,28 @@ describe("cross-branch 50/50 splits", () => {
     for (const c of ["KM", "VV"] as CenterId[]) expect(line(r, c).product).toBe(line(before, c).product);
     expect(person(r, "KM", "Meena").product).toBe(person(before, "KM", "Meena").product);
   });
-  it("does not split lines sold by someone from the billing clinic itself", () => {
+  it("same clinic: splits a VV seller's invoice with another VV person (centre total unchanged)", () => {
     const own = row({ sold_by: "Shivani Bhandari - (VV)", center_name: "Vasant Vihar, New Delhi", collected: 30_000 });
     const r = runS([own], [split({ sold_by: "Shivani Bhandari - (VV)", collected: 30_000 })]);
-    expect(JSON.stringify(r)).toBe(JSON.stringify(runS([own], [])));
+    expect(person(r, "VV", "Shivani").current).toBe(15_000);
+    expect(person(r, "VV", "Vanita").current).toBe(15_000);
+    expect(line(r, "VV").current).toBe(30_000);
+  });
+  it("same clinic: a VV seller's invoice can go half to a person anywhere (e.g. GK)", () => {
+    const own = row({ sold_by: "Shivani Bhandari - (VV)", center_name: "Vasant Vihar, New Delhi", collected: 30_000 });
+    const r = runS([own], [split({ sold_by: "Shivani Bhandari - (VV)", collected: 30_000, to_center: "GK", to_person: "Sakshi Chhabra - (GK)" })]);
+    expect(line(r, "VV").current).toBe(15_000);
+    expect(line(r, "GK").current).toBe(15_000);
+  });
+  it("only the split's seller is split — other sellers' lines on the invoice stay as they are", () => {
+    const other = row({ sold_by: "Shivani Bhandari - (VV)", center_name: "Vasant Vihar, New Delhi", collected: 30_000 });
+    const r = runS([sale, other], [split(), split({ sold_by: "Shivani Bhandari - (VV)", from_seller: "Meena Sharma - (KM)", collected: 30_000 })]);
+    expect(person(r, "VV", "Shivani").current).toBe(30_000);
+    expect(person(r, "KM", "Meena").current).toBe(50_000);
+  });
+  it("never splits to the seller themself", () => {
+    const r = runS([sale], [split({ to_center: "KM", to_person: "Meena Sharma - (KM)" })]);
+    expect(JSON.stringify(r)).toBe(JSON.stringify(runS([sale], [])));
   });
   it("does not split lines whose seller isn't on the roster", () => {
     const walkIn = row({ sold_by: "Someone New", center_name: "Vasant Vihar, New Delhi", collected: 10_000 });

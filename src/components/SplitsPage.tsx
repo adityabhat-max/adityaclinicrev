@@ -49,6 +49,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
   const [invoice, setInvoice] = useState("");
   const [info, setInfo] = useState<Info | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [toCenter, setToCenter] = useState<CenterId | "">("");
   const [toPerson, setToPerson] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -73,7 +74,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
     return { ok: res.ok, j: await res.json().catch(() => ({})) };
   };
 
-  const resetForm = () => { setInfo(null); setProblem(null); setToPerson(""); setNote(""); };
+  const resetForm = () => { setInfo(null); setProblem(null); setToCenter(""); setToPerson(""); setNote(""); };
 
   async function lookup() {
     setError(""); setDone(""); resetForm();
@@ -83,28 +84,29 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
     setBusy(false);
     if (!r) return;
     if (!r.ok) { setError(r.j.error ?? "Could not look up the invoice"); return; }
-    setInfo(r.j.info); setProblem(r.j.problem);
+    setInfo(r.j.info); setProblem(r.j.problem); setToCenter(r.j.info?.centerId ?? "");
   }
 
-  // Half stays with the seller (their own clinic); half goes to a person at the clinic that billed the invoice.
+  // Half stays with the seller (their own clinic); half goes to the person picked — starts on the billing clinic,
+  // but any clinic can be chosen (e.g. the seller's own clinic when the seller was absent). Never the seller.
   const billedAt = info?.centerId ?? null;
-  const billedPeople = PEOPLE.filter((p) => p.center === billedAt);
   const seller = info?.sellers[0];
+  const pickPeople = PEOPLE.filter((p) => p.center === toCenter && personKey(p.name) !== personKey(seller?.name ?? ""));
 
   async function save() {
-    if (!info || !seller || !toPerson) return;
+    if (!info || !seller || !toCenter || !toPerson) return;
     const ok = window.confirm(
       `Split invoice ${info.invoiceNo} 50/50?\n\n`
       + `${seller.name} (${clinicName(seller.center)}) keeps ${inr(info.half)}\n`
-      + `${toPerson} (${clinicName(billedAt)}) gets ${inr(info.half)}\n\n`
+      + `${toPerson} (${clinicName(toCenter || null)}) gets ${inr(info.half)}\n\n`
       + "This is recorded in the split log with your name and the time.");
     if (!ok) return;
     setBusy(true); setError("");
-    const r = await post({ action: "add", invoiceNo: info.invoiceNo, toPerson, note });
+    const r = await post({ action: "add", invoiceNo: info.invoiceNo, toCenter, toPerson, note });
     setBusy(false);
     if (!r) return;
     if (!r.ok) { setError(r.j.error ?? "Could not save the split"); return; }
-    setDone(`Invoice ${info.invoiceNo} split: ${inr(info.half)} moved from ${seller.name} to ${toPerson} (${clinicName(billedAt)}). Reload the dashboard to see it.`);
+    setDone(`Invoice ${info.invoiceNo} split: ${inr(info.half)} moved from ${seller.name} to ${toPerson} (${clinicName(toCenter || null)}). Reload the dashboard to see it.`);
     setInvoice(""); resetForm(); loadLog();
   }
 
@@ -130,7 +132,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
       </header>
 
       <section className="filters">
-        <div className="monthTag">When a client is billed at another clinic, their primary employee (the seller) and a sales person at that clinic share the invoice 50/50.</div>
+        <div className="monthTag">When a client is handled by someone other than their primary employee (the seller) — at another clinic or the same one — the two share the invoice 50/50.</div>
         <Tabs active="splits" role={user.role} />
       </section>
 
@@ -147,7 +149,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
         <section className="card splitForm">
           <h2>Add a split</h2>
           <p className="muted">Enter the invoice raised at the clinic the client visited. Packages, services, pre-paid cards and gift cards
-            sold by a person from another clinic are split; products are not. Invoices paid on or after {windowStart || "the 1st of last month"} (this month or last month) can be split.</p>
+            sold by the seller are split; products are not. Invoices paid on or after {windowStart || "the 1st of last month"} (this month or last month) can be split.</p>
           <div className="row">
             <input value={invoice} onChange={(e) => setInvoice(e.target.value.toUpperCase())} placeholder="Invoice no. e.g. VVR94453"
               onKeyDown={(e) => { if (e.key === "Enter") lookup(); }} aria-label="Invoice number" />
@@ -176,7 +178,7 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
                         <td className="l">{l.split ? <span className="pos">Yes</span>
                           : l.internal ? "No"
                           : l.item_type.toLowerCase() === "product" ? "No (product)"
-                          : "No (seller not from another clinic)"}</td>
+                          : "No (seller not on a sales team)"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -186,10 +188,15 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
               {problem ? <p className="error">{problem}</p> : (
                 <>
                   <div className="row">
-                    <label>Sales person at {clinicName(billedAt)} (gets half)
+                    <label>Clinic of the person who gets half
+                      <select value={toCenter} onChange={(e) => { setToCenter(e.target.value as CenterId); setToPerson(""); }}>
+                        {CENTERS.map((c) => <option key={c.id} value={c.id}>{c.name}{c.id === billedAt ? " (billed here)" : ""}</option>)}
+                      </select>
+                    </label>
+                    <label>Sales person (gets half)
                       <select value={toPerson} onChange={(e) => setToPerson(e.target.value)}>
                         <option value="">Choose…</option>
-                        {billedPeople.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+                        {pickPeople.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
                       </select>
                     </label>
                     <label className="grow">Note (optional)
@@ -200,13 +207,13 @@ export default function SplitsPage({ user }: { user: { name: string; role: Role 
                   {seller && toPerson && (
                     <div className="preview">
                       <div><b>{clinicName(seller.center)}</b> · {seller.name} keeps {inr(info.half)} <span className="neg">({inr(-info.half)})</span></div>
-                      <div><b>{clinicName(billedAt)}</b> · {toPerson} gets {inr(info.half)} <span className="pos">(+{inr(info.half)})</span></div>
+                      <div><b>{clinicName(toCenter || null)}</b> · {toPerson} gets {inr(info.half)} <span className="pos">(+{inr(info.half)})</span></div>
                       <div className="muted">Each payment is split on its own payment date (part payments included).</div>
                     </div>
                   )}
 
                   <div className="row">
-                    <button type="button" className="primary" onClick={save} disabled={busy || !seller || !toPerson}>
+                    <button type="button" className="primary" onClick={save} disabled={busy || !seller || !toCenter || !toPerson}>
                       {busy ? "Saving…" : "Confirm 50/50 split"}
                     </button>
                     <button type="button" onClick={() => { setInvoice(""); resetForm(); }}>Clear</button>
